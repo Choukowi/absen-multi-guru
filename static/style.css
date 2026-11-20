@@ -43,6 +43,10 @@ code { background: #eef1f8; padding: 1px 6px; border-radius: 6px; font-size: .88
 .brand-mark svg { width: 24px; height: 24px; }
 .brand-mark.sm { width: 34px; height: 34px; border-radius: 10px; }
 .brand-mark.sm svg { width: 20px; height: 20px; }
+.brand-mark.has-logo { background: #fff; border: 1px solid var(--garis);
+  padding: 3px; overflow: hidden; }
+.brand-mark.has-logo img { width: 100%; height: 100%; object-fit: contain;
+  display: block; border-radius: 8px; }
 .brand-name { font-weight: 800; font-size: 1.12rem; letter-spacing: -.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidenav { display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; }
@@ -238,6 +242,10 @@ table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
 .wp-preview { margin: 8px 0 12px; }
 .wp-preview img { max-width: 100%; max-height: 220px; border-radius: 12px;
   border: 1px solid var(--garis); box-shadow: var(--shadow-sm); object-fit: cover; }
+.logo-preview { margin: 8px 0 12px; }
+.logo-preview img { width: 96px; height: 96px; object-fit: contain; padding: 6px;
+  background: #fff; border-radius: 16px; border: 1px solid var(--garis);
+  box-shadow: var(--shadow-sm); }
 
 /* ---------- Halaman login ---------- */
 .auth-body { min-height: 100vh; }
@@ -257,6 +265,7 @@ table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
     color: #fff; background: linear-gradient(120deg, var(--indigo), var(--biru));
     position: sticky; top: 0; z-index: 20; box-shadow: var(--shadow-sm); }
   .topbar .brand-mark { background: rgba(255,255,255,.18); box-shadow: none; }
+  .topbar .brand-mark.has-logo { background: #fff; }
   .topbar-title { font-weight: 800; flex: 1; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .topbar .avatar { background: rgba(255,255,255,.25); }
