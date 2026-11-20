@@ -1,5 +1,6 @@
-// Scan QR di dalam aplikasi: kamera browser (getUserMedia) + jsQR (CDN).
-// Fallback: ketik kode manual pada form yang sama, atau tombol Mode Demo.
+// Scan QR di gerbang: kamera browser (getUserMedia) + jsQR (CDN).
+// QR terbaca -> isi kolom kode lalu kirim form ke /api/scan (server mencatat
+// kehadiran hari itu). Fallback: ketik NIS / kode guru secara manual.
 (function () {
   var video = document.getElementById('cam');
   if (!video) return;
@@ -7,7 +8,6 @@
   var btnStop = document.getElementById('btnStop');
   var status = document.getElementById('scanStatus');
   var kodeInput = document.getElementById('kodeInput');
-  var metodeInput = document.getElementById('metodeInput');
   var form = document.getElementById('scanForm');
   var stream = null, raf = null, scanning = false;
 
@@ -32,7 +32,6 @@
         if (code && code.data) {
           status.textContent = 'QR terbaca: ' + code.data + ' - mencatat...';
           kodeInput.value = code.data;
-          metodeInput.value = 'scan';
           stop();
           form.submit();
           return;
@@ -44,18 +43,18 @@
 
   btnCam.addEventListener('click', function () {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      status.textContent = 'Browser ini tidak mendukung kamera (getUserMedia). Pakai ketik kode manual atau Mode Demo.';
+      status.textContent = 'Browser ini tidak mendukung kamera (getUserMedia). Pakai ketik kode manual di bawah.';
       return;
     }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
       .then(function (s) {
         stream = s; video.srcObject = s; scanning = true;
         btnCam.disabled = true; btnStop.disabled = false;
-        status.textContent = 'Kamera aktif. Arahkan ke QR Code siswa...';
+        status.textContent = 'Kamera aktif. Arahkan kartu QR siswa/guru ke kamera...';
         raf = requestAnimationFrame(tick);
       })
       .catch(function (e) {
-        status.textContent = 'Kamera ditolak/gagal: ' + e.message + ' Pakai ketik kode manual atau Mode Demo.';
+        status.textContent = 'Kamera ditolak/gagal: ' + e.message + ' Pakai ketik kode manual di bawah.';
       });
   });
   btnStop.addEventListener('click', stop);
