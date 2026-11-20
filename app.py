@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """
-Aplikasi Absen Siswa Multi-Guru
-Stack: Python 3 stdlib (http.server + sqlite3) + library `qrcode`/`Pillow`
-untuk membuat gambar QR kartu siswa. Tanpa framework web eksternal.
+Aplikasi Absen Siswa — model GERBANG GLOBAL (satu perangkat scan di gerbang).
+
+Stack: Python 3 stdlib (http.server + sqlite3) + `qrcode`/`Pillow` untuk
+gambar QR kartu + `openpyxl` untuk unduhan Excel tabel mingguan.
+
+Model absen:
+- Tidak ada lagi sesi per mata pelajaran / penugasan. Setiap siswa & guru
+  punya kartu QR (siswa: NIS; guru: kode QR guru, mis. G001).
+- Di gerbang, petugas scan QR lewat halaman /scan-gerbang (kamera + jsQR,
+  atau ketik kode manual) -> POST /api/scan mencatat kehadiran HARI ITU:
+  scan <= 07:00 = Hadir, lewat 07:00 = Terlambat (jam dicatat persis).
+- Yang sampai 09:00 belum scan otomatis menjadi Alpa (metode 'auto'),
+  terisi saat tabel/dashboard dibuka. Sakit/Izin diisi manual.
+- Tabel mingguan Senin-Sabtu per kelas (siswa) dan untuk guru bisa dilihat
+  semua pengguna yang login, dan diunduh sebagai Excel (.xlsx).
 
 Jalankan:  python3 app.py            (default http://127.0.0.1:8000)
            PORT=8080 python3 app.py
@@ -11,16 +23,70 @@ import hashlib
 import html
 import io
 import os
+import re
 import secrets
 import sqlite3
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ABSEN_DB", os.path.join(BASE_DIR, "data", "absen.db"))
 PORT = int(os.environ.get("PORT", "8000"))
+TZ_JKT = ZoneInfo("Asia/Jakarta")
+
+JAM_BATAS_HADIR = dtime(7, 0)    # scan <= 07:00 -> Hadir
+JAM_BATAS_ALPA = dtime(9, 0)     # >= 09:00 belum scan -> Alpa otomatis
+STATUS_LIST = ["Hadir", "Terlambat", "Sakit", "Izin", "Alpa"]
+NAMA_HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+NAMA_BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
+              "Agustus", "September", "Oktober", "November", "Desember"]
+NAMA_BULAN_SINGKAT = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul",
+                      "Agu", "Sep", "Okt", "Nov", "Des"]
+
+
+def waktu_sekarang():
+    """Datetime 'sekarang' sadar-zona di Asia/Jakarta.
+
+    Untuk pengujian, env var ABSEN_NOW_OVERRIDE (format ISO, mis.
+    '2026-11-16T06:45:00') menggantikan jam asli. Env dibaca SETIAP
+    pemanggilan, jadi server uji cukup di-restart dengan env baru.
+    Ini hook khusus tes — jangan dipakai di produksi.
+    """
+    ov = os.environ.get("ABSEN_NOW_OVERRIDE", "").strip()
+    if ov:
+        try:
+            dt = datetime.fromisoformat(ov)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=TZ_JKT)
+            return dt.astimezone(TZ_JKT)
+        except ValueError:
+            pass
+    return datetime.now(TZ_JKT)
+
+
+def fmt_tanggal(d):
+    """date -> '16 November 2026'."""
+    return f"{d.day} {NAMA_BULAN[d.month - 1]} {d.year}"
+
+
+def fmt_jam_titik(jam):
+    """'06:45' -> '06.45' (gaya tampilan tabel & Excel)."""
+    return jam.replace(":", ".") if jam else ""
+
+
+def senin_dari(d):
+    """date -> date hari Senin pada minggu yang sama."""
+    return d - timedelta(days=d.weekday())
+
+
+def minggu_sen_sab(d):
+    """date -> list 6 date (Senin..Sabtu) pada minggu tanggal itu."""
+    sen = senin_dari(d)
+    return [sen + timedelta(days=i) for i in range(6)]
+
 
 # ---------------------------------------------------------------------------
 # Database
@@ -33,54 +99,42 @@ CREATE TABLE IF NOT EXISTS users (
     salt TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('admin','guru')),
     nama TEXT NOT NULL,
-    aktif INTEGER NOT NULL DEFAULT 1
+    aktif INTEGER NOT NULL DEFAULT 1,
+    mapel TEXT DEFAULT '',
+    kode_qr TEXT
 );
 CREATE TABLE IF NOT EXISTS classes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nama TEXT UNIQUE NOT NULL
-);
-CREATE TABLE IF NOT EXISTS subjects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nama TEXT UNIQUE NOT NULL
 );
 CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nama TEXT NOT NULL,
-    kode TEXT UNIQUE NOT NULL,          -- kode unik siswa (boleh = NIS)
+    kode TEXT UNIQUE NOT NULL,          -- NIS siswa (isi QR kartunya)
     class_id INTEGER NOT NULL REFERENCES classes(id)
 );
-CREATE TABLE IF NOT EXISTS assignments (
+CREATE TABLE IF NOT EXISTS kehadiran (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    class_id INTEGER NOT NULL REFERENCES classes(id),
-    subject_id INTEGER NOT NULL REFERENCES subjects(id),
-    UNIQUE (user_id, class_id, subject_id)
-);
-CREATE TABLE IF NOT EXISTS sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    class_id INTEGER NOT NULL REFERENCES classes(id),
-    subject_id INTEGER NOT NULL REFERENCES subjects(id),
-    teacher_id INTEGER NOT NULL REFERENCES users(id),
-    tanggal TEXT NOT NULL,              -- YYYY-MM-DD
-    jam_mulai TEXT NOT NULL,            -- HH:MM
-    batas_terlambat_menit INTEGER NOT NULL DEFAULT 15,
-    status TEXT NOT NULL DEFAULT 'buka' CHECK (status IN ('buka','tutup'))
-);
-CREATE TABLE IF NOT EXISTS attendance (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL REFERENCES sessions(id),
-    student_id INTEGER NOT NULL REFERENCES students(id),
+    tanggal TEXT NOT NULL,              -- YYYY-MM-DD (Asia/Jakarta)
+    ref_type TEXT NOT NULL CHECK (ref_type IN ('siswa','guru')),
+    ref_id INTEGER NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('Hadir','Terlambat','Sakit','Izin','Alpa')),
-    metode TEXT NOT NULL DEFAULT 'manual',   -- scan / manual / demo / otomatis
-    waktu TEXT,                              -- ISO datetime saat dicatat
-    recorded_by INTEGER REFERENCES users(id),
-    UNIQUE (session_id, student_id)
+    jam TEXT,                           -- HH:MM (Jakarta); NULL untuk non-scan
+    metode TEXT NOT NULL DEFAULT 'scan' CHECK (metode IN ('scan','manual','auto')),
+    dicatat_oleh INTEGER REFERENCES users(id),
+    UNIQUE (tanggal, ref_type, ref_id)
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+-- Tabel lama (subjects/assignments/sessions/attendance) sengaja TIDAK dibuat
+-- lagi di sini; pada file DB lama tabel-tabel itu boleh tetap ada, tidak dipakai.
 """
 
 
 def db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -100,10 +154,34 @@ def verify_password(password, password_hash, salt):
     return secrets.compare_digest(dk.hex(), password_hash)
 
 
+def kode_qr_guru_baru(conn, gid):
+    """Kode QR guru: 'G' + id 3 digit (G001). Unik di antara guru."""
+    kode = f"G{gid:03d}"
+    n = 1
+    while conn.execute("SELECT 1 FROM users WHERE kode_qr=? AND id<>?",
+                       (kode, gid)).fetchone():
+        n += 1
+        kode = f"G{gid:03d}-{n}"
+    return kode
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = db()
     conn.executescript(SCHEMA)
+    # --- migrasi idempoten untuk DB lama ---
+    kolom_users = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+    if "mapel" not in kolom_users:
+        conn.execute("ALTER TABLE users ADD COLUMN mapel TEXT DEFAULT ''")
+    if "kode_qr" not in kolom_users:
+        conn.execute("ALTER TABLE users ADD COLUMN kode_qr TEXT")
+    conn.commit()
+    # backfill kode_qr untuk guru lama yang belum punya
+    for r in conn.execute(
+            "SELECT id FROM users WHERE role='guru' AND (kode_qr IS NULL OR kode_qr='')").fetchall():
+        conn.execute("UPDATE users SET kode_qr=? WHERE id=?",
+                     (kode_qr_guru_baru(conn, r["id"]), r["id"]))
+    conn.commit()
     row = conn.execute("SELECT COUNT(*) c FROM users").fetchone()
     if row["c"] == 0:
         # Akun admin AWAL khusus pengujian lokal. WAJIB diganti sebelum produksi.
@@ -117,6 +195,35 @@ def init_db():
     conn.close()
 
 
+def pastikan_alpa(conn, tanggal):
+    """Isi Alpa otomatis (metode 'auto') untuk satu tanggal bila sudah waktunya.
+
+    Berlaku untuk tanggal Senin-Sabtu yang sudah lewat, atau hari ini bila
+    jam Jakarta sudah >= 09:00. Tidak pernah untuk tanggal masa depan
+    atau hari Minggu. Siswa & guru aktif yang belum punya catatan apa pun
+    pada tanggal itu menjadi Alpa.
+    """
+    try:
+        d = datetime.strptime(tanggal, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return
+    if d.weekday() >= 6:  # Minggu tidak ada absen
+        return
+    now = waktu_sekarang()
+    if d > now.date():
+        return
+    if d == now.date() and now.time() < JAM_BATAS_ALPA:
+        return
+    conn.execute(
+        """INSERT OR IGNORE INTO kehadiran (tanggal, ref_type, ref_id, status, jam, metode, dicatat_oleh)
+           SELECT ?, 'siswa', id, 'Alpa', NULL, 'auto', NULL FROM students""", (tanggal,))
+    conn.execute(
+        """INSERT OR IGNORE INTO kehadiran (tanggal, ref_type, ref_id, status, jam, metode, dicatat_oleh)
+           SELECT ?, 'guru', id, 'Alpa', NULL, 'auto', NULL FROM users
+           WHERE role='guru' AND aktif=1""", (tanggal,))
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Session login (server-side, cookie hanya menyimpan token acak)
 # ---------------------------------------------------------------------------
@@ -127,40 +234,151 @@ def esc(v):
     return html.escape(str(v if v is not None else ""), quote=True)
 
 
+def js_str(v):
+    return str(v).replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+
+
 # ---------------------------------------------------------------------------
-# HTML layout
+# Ikon SVG inline (tanpa aset eksternal)
 # ---------------------------------------------------------------------------
-def layout(user, title, body, flash=""):
-    nav = ""
-    if user:
-        if user["role"] == "admin":
-            nav = ('<a href="/dashboard">Dashboard</a><a href="/admin/guru">Guru</a>'
-                   '<a href="/admin/kelas">Kelas</a><a href="/admin/mapel">Mapel</a>'
-                   '<a href="/admin/siswa">Siswa</a><a href="/admin/penugasan">Penugasan</a>'
-                   '<a href="/rekap">Rekap</a>')
-        else:
-            nav = ('<a href="/dashboard">Dashboard</a><a href="/guru/sesi">Sesi Saya</a>'
-                   '<a href="/rekap">Rekap</a>')
-        nav += '<a href="/ganti-password">Ganti Password</a><a href="/logout">Keluar</a>'
+def _svg(inner):
+    return (f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+            f'aria-hidden="true">{inner}</svg>')
+
+
+ICONS = {
+    "logo": _svg('<rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/>'
+                 '<rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/>'
+                 '<rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/>'
+                 '<path d="M13.5 17.5l2 2 4-4.5"/>'),
+    "grid": _svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/>'
+                 '<rect x="14" y="3" width="7" height="7" rx="1.5"/>'
+                 '<rect x="3" y="14" width="7" height="7" rx="1.5"/>'
+                 '<rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+    "scan": _svg('<path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3"/>'
+                 '<path d="M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>'
+                 '<path d="M3 12h18"/>'),
+    "users": _svg('<circle cx="9" cy="8" r="3.5"/>'
+                  '<path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/>'
+                  '<path d="M15.5 4.7a3.5 3.5 0 0 1 0 6.6M21 20c0-2.8-1.9-4.8-4.5-5.3"/>'),
+    "badge": _svg('<rect x="4" y="3" width="16" height="18" rx="2"/>'
+                  '<circle cx="12" cy="10" r="2.5"/>'
+                  '<path d="M8 17c.6-1.8 2.2-2.7 4-2.7s3.4.9 4 2.7"/>'),
+    "cap": _svg('<path d="M2 9l10-4 10 4-10 4z"/>'
+                '<path d="M6 11.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5"/>'
+                '<path d="M22 9v5"/>'),
+    "building": _svg('<path d="M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16"/>'
+                     '<path d="M15 8h3a2 2 0 0 1 2 2v11"/><path d="M3 21h18"/>'
+                     '<path d="M8.5 7h.01M11.5 7h.01M8.5 11h.01M11.5 11h.01M8.5 15h.01M11.5 15h.01"/>'),
+    "printer": _svg('<path d="M6 9V3h12v6"/>'
+                    '<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>'
+                    '<rect x="6" y="14" width="12" height="8"/>'),
+    "key": _svg('<circle cx="8" cy="15" r="4.5"/>'
+                '<path d="M11.2 11.8L20 3M16.5 4.5l3 3M13.8 7.2l2.7 2.7"/>'),
+    "logout": _svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>'
+                   '<path d="M16 17l5-5-5-5M21 12H9"/>'),
+    "menu": _svg('<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/>'
+                 '<circle cx="19" cy="12" r="1.6"/>'),
+    "check": _svg('<path d="M4 12.5l5 5L20 6.5"/>'),
+    "clock": _svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+    "x": _svg('<path d="M5 5l14 14M19 5L5 19"/>'),
+    "table": _svg('<rect x="3" y="4" width="18" height="16" rx="2"/>'
+                  '<path d="M3 10h18M9 10v10M15 10v10"/>'),
+    "download": _svg('<path d="M12 3v12M6.5 10.5L12 16l5.5-5.5"/><path d="M4 20h16"/>'),
+    "sliders": _svg('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/>'
+                    '<path d="M1.5 14h5M9.5 8h5M17.5 16h5"/>'),
+}
+
+
+def icon(name):
+    return ICONS.get(name, "")
+
+
+# ---------------------------------------------------------------------------
+# HTML layout — shell aplikasi modern (sidebar desktop + bottom-nav mobile)
+# ---------------------------------------------------------------------------
+def nav_items(user):
+    items = [("dashboard", "/dashboard", "Dashboard", "grid"),
+             ("scan", "/scan-gerbang", "Scan Gerbang", "scan"),
+             ("tabel-siswa", "/tabel-siswa", "Tabel Siswa", "users"),
+             ("tabel-guru", "/tabel-guru", "Tabel Guru", "badge")]
+    if user["role"] == "admin":
+        items += [("siswa", "/admin/siswa", "Siswa", "cap"),
+                  ("guru", "/admin/guru", "Guru", "badge"),
+                  ("kelas", "/admin/kelas", "Kelas", "building"),
+                  ("tampilan", "/admin/tampilan", "Pengaturan Tampilan", "sliders")]
+    items += [("cetak", "/cetak", "Cetak Kartu", "printer"),
+              ("ganti-password", "/ganti-password", "Ganti Password", "key")]
+    return items
+
+
+def layout(user, title, body, flash="", aktif=""):
     flash_html = f'<div class="flash">{esc(flash)}</div>' if flash else ""
-    user_html = (f'<div class="userbar">{esc(user["nama"])} '
-                 f'({esc(user["role"])})</div>') if user else ""
+    peng = get_pengaturan()
+    nama_app = peng["nama_sekolah"] or "Absen Siswa"
+    bg_style = f' style="background-color:{peng["bg_color"]}"'
+    wp_layer = ""
+    if peng["wallpaper"]:
+        wp_layer = (f'<div class="bg-wallpaper" '
+                    f'style="background-image:url(\'/wallpaper/{esc(peng["wallpaper"])}\')"></div>')
+    tahun = waktu_sekarang().year
+    if not user:
+        return f"""<!DOCTYPE html>
+<html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(title)} - {esc(nama_app)}</title>
+<link rel="stylesheet" href="/static/style.css"></head>
+<body class="auth-body"{bg_style}>{wp_layer}<div class="auth-wrap">
+<div class="auth-card">
+<div class="auth-brand"><span class="brand-mark">{icon('logo')}</span>
+<span class="brand-name">{esc(nama_app)}</span></div>
+{flash_html}{body}</div>
+<p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
+</div></body></html>"""
+    items = nav_items(user)
+    sidenav = "".join(
+        f'<a class="nav-item{" aktif" if k == aktif else ""}" href="{href}">'
+        f'{icon(ic)}<span>{label}</span></a>' for k, href, label, ic in items)
+    bawah = [("dashboard", "/dashboard", "Dashboard", "grid"),
+             ("scan", "/scan-gerbang", "Scan", "scan"),
+             ("tabel-siswa", "/tabel-siswa", "Siswa", "users"),
+             ("tabel-guru", "/tabel-guru", "Guru", "badge"),
+             ("menu", "/menu", "Menu", "menu")]
+    bottomnav = "".join(
+        f'<a class="bnav-item{" aktif" if k == aktif else ""}" href="{href}">'
+        f'{icon(ic)}<span>{label}</span></a>' for k, href, label, ic in bawah)
+    initial = esc((user["nama"] or "?").strip()[:1].upper() or "?")
+    role_label = "Admin" if user["role"] == "admin" else "Guru"
     return f"""<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{esc(title)} - Absen Siswa</title>
+<title>{esc(title)} - {esc(nama_app)}</title>
 <link rel="stylesheet" href="/static/style.css"></head>
-<body><header><h1>Aplikasi Absen Siswa</h1>{user_html}<nav>{nav}</nav></header>
+<body{bg_style}>{wp_layer}<div class="shell">
+<aside class="sidebar">
+<div class="brand"><span class="brand-mark">{icon('logo')}</span>
+<span class="brand-name">{esc(nama_app)}</span></div>
+<nav class="sidenav">{sidenav}</nav>
+<div class="userchip"><span class="avatar">{initial}</span>
+<span class="uinfo"><b>{esc(user["nama"])}</b><small>{role_label}</small></span>
+<a class="logout-btn" href="/logout" title="Keluar">{icon('logout')}</a></div>
+</aside>
+<div class="content">
+<header class="topbar"><span class="brand-mark sm">{icon('logo')}</span>
+<span class="topbar-title">{esc(nama_app)}</span><span class="avatar">{initial}</span></header>
 <main>{flash_html}{body}</main>
-<footer><small>Absen per mata pelajaran &bull; scan QR Code biasa (bukan QRIS pembayaran)</small></footer>
-</body></html>"""
+<footer><small>&copy; {tahun} {esc(nama_app)} &bull; Absensi gerbang sekolah &bull; QR Code biasa (bukan QRIS pembayaran)</small></footer>
+</div>
+<nav class="bottomnav">{bottomnav}</nav>
+</div></body></html>"""
 
 
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AbsenMultiGuru/1.0"
+    server_version = "AbsenGerbang/2.0"
 
     def log_message(self, fmt, *args):  # lebih senyap
         pass
@@ -173,6 +391,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         for k, v in (extra_headers or []):
             self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def send_bytes(self, data, ctype, filename=None):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        if filename:
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
@@ -232,14 +459,11 @@ class Handler(BaseHTTPRequestHandler):
             ctype = "text/css" if path.endswith(".css") else "application/javascript"
             with open(fname, "rb") as f:
                 data = f.read()
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
+            return self.send_bytes(data, ctype)
         if path.startswith("/qr/") and path.endswith(".png"):
             return self.qr_png(path[4:-4])
+        if path.startswith("/wallpaper/"):
+            return self.wallpaper_file(path[len("/wallpaper/"):])
         if path == "/":
             return self.redirect("/dashboard")
         if path == "/login":
@@ -247,8 +471,8 @@ class Handler(BaseHTTPRequestHandler):
             <form method="post" action="/login">
               <label>Username <input name="username" required autocomplete="username"></label>
               <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
-              <button type="submit">Masuk</button></form>
-            <p><small>Akun uji lokal ada di README proyek. Jangan pakai akun awal di produksi.</small></p>"""
+              <button type="submit" class="btn btn-primary btn-block">Masuk</button></form>
+            <p class="muted"><small>Akun uji lokal ada di README proyek. Jangan pakai akun awal di produksi.</small></p>"""
             return self.send_html(layout(None, "Masuk", body, flash))
         if path == "/logout":
             cookie = SimpleCookie(self.headers.get("Cookie", ""))
@@ -265,16 +489,31 @@ class Handler(BaseHTTPRequestHandler):
             return self.dashboard(user, flash)
         if path == "/ganti-password":
             body = """<h2>Ganti Password</h2>
-            <form method="post" action="/ganti-password">
+            <form method="post" action="/ganti-password" class="card form-card">
               <label>Password baru <input name="password" type="password" required minlength="8"></label>
-              <button type="submit">Simpan</button></form>"""
-            return self.send_html(layout(user, "Ganti Password", body, flash))
-        if path == "/rekap":
-            return self.rekap(user, flash)
-        if path.startswith("/rekap/") and path.endswith("/csv"):
-            return self.rekap_csv(user, int(path.split("/")[2]))
-        if path.startswith("/cetak/"):
-            return self.cetak(user, int(path.split("/")[2]), flash)
+              <button type="submit" class="btn btn-primary">Simpan</button></form>"""
+            return self.send_html(layout(user, "Ganti Password", body, flash,
+                                         aktif="ganti-password"))
+        if path == "/scan-gerbang":
+            return self.scan_gerbang(user, flash)
+        if path == "/tabel-siswa":
+            return self.tabel_siswa(user, qs, flash)
+        if path == "/tabel-guru":
+            return self.tabel_guru(user, qs, flash)
+        if path == "/tabel-siswa/excel":
+            return self.excel_siswa(user, qs)
+        if path == "/tabel-guru/excel":
+            return self.excel_guru(user, qs)
+        if path == "/kehadiran/edit":
+            return self.kehadiran_edit(user, qs, flash)
+        if path == "/menu":
+            return self.menu_page(user, flash)
+        if path == "/cetak":
+            return self.cetak_index(user, flash)
+        if path == "/cetak/guru":
+            return self.cetak_guru(user, flash)
+        if path.startswith("/cetak/kelas/"):
+            return self.cetak_kelas(user, int(path.split("/")[3]), flash)
         if user["role"] == "admin":
             if path == "/admin/guru": return self.admin_guru(user, flash)
             if path.startswith("/admin/guru/") and path.endswith("/edit"):
@@ -282,19 +521,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/kelas": return self.admin_kelas(user, flash)
             if path.startswith("/admin/kelas/") and path.endswith("/edit"):
                 return self.admin_kelas_edit(user, int(path.split("/")[3]), flash)
-            if path == "/admin/mapel": return self.admin_mapel(user, flash)
-            if path.startswith("/admin/mapel/") and path.endswith("/edit"):
-                return self.admin_mapel_edit(user, int(path.split("/")[3]), flash)
             if path == "/admin/siswa": return self.admin_siswa(user, qs, flash)
             if path.startswith("/admin/siswa/") and path.endswith("/edit"):
                 return self.admin_siswa_edit(user, int(path.split("/")[3]), flash)
-            if path == "/admin/penugasan": return self.admin_penugasan(user, flash)
-            if path.startswith("/admin/penugasan/") and path.endswith("/edit"):
-                return self.admin_penugasan_edit(user, int(path.split("/")[3]), flash)
-        if user["role"] == "guru":
-            if path == "/guru/sesi": return self.guru_sesi(user, flash)
-            if path.startswith("/sesi/"): return self.sesi_detail(user, int(path.split("/")[2]), flash)
-        return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"), status=404)
+            if path == "/admin/tampilan": return self.admin_tampilan(user, flash)
+        return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>",
+                                     aktif=""), status=404)
 
     # -- POST routes --------------------------------------------------------
     def route_post(self, path):
@@ -303,6 +535,11 @@ class Handler(BaseHTTPRequestHandler):
         user = self.current_user()
         if not user:
             return self.redirect("/login", "Silakan masuk dulu.")
+        if path == "/admin/tampilan/wallpaper":
+            if user["role"] != "admin":
+                return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                                      status=404)
+            return self.post_admin_tampilan_wallpaper()
         f = self.form()
         if path == "/ganti-password":
             ph, salt = hash_password(f["password"])
@@ -311,6 +548,10 @@ class Handler(BaseHTTPRequestHandler):
                          (ph, salt, user["id"]))
             conn.commit(); conn.close()
             return self.redirect("/dashboard", "Password berhasil diganti.")
+        if path == "/api/scan":
+            return self.post_scan(user, f)
+        if path == "/kehadiran/edit":
+            return self.post_kehadiran_edit(user, f)
         if user["role"] == "admin":
             if path == "/admin/guru": return self.post_admin_guru(f)
             if path.startswith("/admin/guru/") and path.endswith("/edit"):
@@ -324,29 +565,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.post_admin_kelas_edit(int(path.split("/")[3]), f)
             if path.startswith("/admin/kelas/") and path.endswith("/hapus"):
                 return self.post_admin_kelas_hapus(int(path.split("/")[3]))
-            if path == "/admin/mapel": return self.post_admin_mapel(f)
-            if path.startswith("/admin/mapel/") and path.endswith("/edit"):
-                return self.post_admin_mapel_edit(int(path.split("/")[3]), f)
-            if path.startswith("/admin/mapel/") and path.endswith("/hapus"):
-                return self.post_admin_mapel_hapus(int(path.split("/")[3]))
             if path == "/admin/siswa": return self.post_admin_siswa(f)
             if path.startswith("/admin/siswa/") and path.endswith("/edit"):
                 return self.post_admin_siswa_edit(int(path.split("/")[3]), f)
             if path.startswith("/admin/siswa/") and path.endswith("/hapus"):
                 return self.post_admin_siswa_hapus(int(path.split("/")[3]))
-            if path == "/admin/penugasan": return self.post_admin_penugasan(f)
-            if path.startswith("/admin/penugasan/") and path.endswith("/edit"):
-                return self.post_admin_penugasan_edit(int(path.split("/")[3]), f)
-            if path.startswith("/admin/penugasan/") and path.endswith("/hapus"):
-                return self.post_admin_penugasan_hapus(int(path.split("/")[3]))
-        if user["role"] == "guru":
-            if path == "/guru/sesi/buat": return self.post_buat_sesi(user, f)
-            if path.startswith("/sesi/"):
-                sid = int(path.split("/")[2])
-                if path.endswith("/scan"): return self.post_scan(user, sid, f)
-                if path.endswith("/manual"): return self.post_manual(user, sid, f)
-                if path.endswith("/tutup"): return self.post_tutup(user, sid)
-        return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"), status=404)
+            if path == "/admin/tampilan": return self.post_admin_tampilan(f)
+            if path == "/admin/tampilan/wallpaper/hapus":
+                return self.post_admin_tampilan_wallpaper_hapus()
+        return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                              status=404)
 
     # -- auth ---------------------------------------------------------------
     def post_login(self):
@@ -356,8 +584,7 @@ class Handler(BaseHTTPRequestHandler):
                            (f.get("username", "").strip(),)).fetchone()
         conn.close()
         if row and not row["aktif"]:
-            # Akun nonaktif tidak bisa masuk (query utama di bawah memfilter aktif=1);
-            # beri pesan yang jelas bila password-nya memang benar.
+            # Akun nonaktif tidak bisa masuk; beri pesan jelas bila password-nya benar.
             if verify_password(f.get("password", ""), row["password_hash"], row["salt"]):
                 return self.redirect("/login", "Akun ini sudah dinonaktifkan.")
             return self.redirect("/login", "Username atau password salah.")
@@ -368,721 +595,666 @@ class Handler(BaseHTTPRequestHandler):
                                  set_cookie=f"absen_session={token}; HttpOnly; Path=/; SameSite=Lax")
         return self.redirect("/login", "Username atau password salah.")
 
+    # -- dashboard ------------------------------------------------------------
     def dashboard(self, user, flash):
+        now = waktu_sekarang()
+        today = now.date()
+        tgl = today.strftime("%Y-%m-%d")
+        kemarin = (today - timedelta(days=1)).strftime("%Y-%m-%d")
         conn = db()
-        if user["role"] == "admin":
-            stats = {}
-            for key, q in [("Guru", "SELECT COUNT(*) c FROM users WHERE role='guru'"),
-                           ("Kelas", "SELECT COUNT(*) c FROM classes"),
-                           ("Mapel", "SELECT COUNT(*) c FROM subjects"),
-                           ("Siswa", "SELECT COUNT(*) c FROM students"),
-                           ("Sesi", "SELECT COUNT(*) c FROM sessions")]:
-                stats[key] = conn.execute(q).fetchone()["c"]
-            cards = "".join(f'<div class="card"><b>{v}</b><span>{esc(k)}</span></div>'
-                            for k, v in stats.items())
-            warn = ""
-            if verify_password("admin123", user["password_hash"], user["salt"]):
-                warn = ('<div class="flash warn">PERINGATAN: akun admin ini masih memakai '
-                        'password awal lokal. Segera ganti lewat menu Ganti Password '
-                        'sebelum dipakai beneran.</div>')
-            body = f"<h2>Dashboard Admin</h2>{warn}<div class='grid'>{cards}</div>"
-        else:
-            rows = conn.execute(
-                """SELECT s.*, c.nama kelas, sub.nama mapel FROM sessions s
-                   JOIN classes c ON c.id=s.class_id JOIN subjects sub ON sub.id=s.subject_id
-                   WHERE s.teacher_id=? ORDER BY s.id DESC LIMIT 10""", (user["id"],)).fetchall()
-            items = "".join(
-                f'<li><a href="/sesi/{r["id"]}">{esc(r["tanggal"])} &bull; {esc(r["kelas"])} &bull; '
-                f'{esc(r["mapel"])} &bull; {esc(r["status"])}</a></li>' for r in rows) or "<li>Belum ada sesi.</li>"
-            body = f"<h2>Dashboard Guru</h2><p>Sesi terakhir Anda:</p><ul>{items}</ul>"
+        pastikan_alpa(conn, tgl)
+        pastikan_alpa(conn, kemarin)
+        hitung = {}
+        for tipe in ("siswa", "guru"):
+            for st in STATUS_LIST:
+                hitung[(tipe, st)] = conn.execute(
+                    "SELECT COUNT(*) c FROM kehadiran WHERE tanggal=? AND ref_type=? AND status=?",
+                    (tgl, tipe, st)).fetchone()["c"]
+        total_siswa = conn.execute("SELECT COUNT(*) c FROM students").fetchone()["c"]
+        tercatat_siswa = sum(hitung[("siswa", s)] for s in STATUS_LIST)
+        belum = max(total_siswa - tercatat_siswa, 0)
+        datang = conn.execute(
+            """SELECT k.status, k.jam, s.nama AS nama, c.nama AS sub, 'siswa' AS tipe
+               FROM kehadiran k JOIN students s ON s.id=k.ref_id
+               JOIN classes c ON c.id=s.class_id
+               WHERE k.tanggal=? AND k.ref_type='siswa' AND k.metode='scan'
+               UNION ALL
+               SELECT k.status, k.jam, u.nama, u.mapel, 'guru'
+               FROM kehadiran k JOIN users u ON u.id=k.ref_id
+               WHERE k.tanggal=? AND k.ref_type='guru' AND k.metode='scan'
+               ORDER BY jam DESC LIMIT 10""", (tgl, tgl)).fetchall()
         conn.close()
-        return self.send_html(layout(user, "Dashboard", body, flash))
-
-
-    # -- admin: guru --------------------------------------------------------
-    def admin_guru(self, user, flash):
-        conn = db()
-        rows = conn.execute(
-            """SELECT u.*, (SELECT COUNT(*) FROM sessions s WHERE s.teacher_id=u.id) AS jml_sesi,
-                      (SELECT COUNT(*) FROM attendance a WHERE a.recorded_by=u.id) AS jml_catat
-               FROM users u WHERE u.role='guru' ORDER BY u.nama""").fetchall()
-        conn.close()
-        items = ""
-        for r in rows:
-            nama_js = r["nama"].replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
-            dasar = (f'<li>{esc(r["nama"])} &mdash; username: <code>{esc(r["username"])}</code> '
-                     f'&mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
-            if not r["aktif"]:
-                items += (dasar + '(nonaktif) '
-                          f'<form method="post" action="/admin/guru/{r["id"]}/aktifkan" class="inline">'
-                          f'<button type="submit">Aktifkan</button></form></li>')
-            elif r["jml_sesi"] or r["jml_catat"]:
-                # Punya riwayat absen: tombol Hapus akan menonaktifkan, bukan menghapus.
-                confirm_msg = (f"Nonaktifkan guru {nama_js}? Guru ini sudah punya riwayat sesi absen, "
-                               f"jadi akunnya akan dinonaktifkan (bukan dihapus) dan riwayat "
-                               f"absennya tetap tersimpan.")
-                items += (dasar +
-                          f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
-                          f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                          f'<button type="submit">Hapus</button></form></li>')
-            else:
-                confirm_msg = f"Hapus guru {nama_js}? Akun guru ini akan dihapus permanen."
-                items += (dasar +
-                          f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
-                          f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                          f'<button type="submit">Hapus</button></form></li>')
-        items = items or "<li>Belum ada guru.</li>"
-        body = f"""<h2>Kelola Guru</h2><ul>{items}</ul>
-        <h3>Tambah Guru</h3>
-        <form method="post" action="/admin/guru">
-          <label>Nama <input name="nama" required></label>
-          <label>Username <input name="username" required></label>
-          <label>Password awal <input name="password" type="password" required minlength="8"></label>
-          <button type="submit">Tambah Guru</button></form>"""
-        return self.send_html(layout(user, "Guru", body, flash))
-
-    def post_admin_guru(self, f):
-        try:
-            ph, salt = hash_password(f["password"])
-            conn = db()
-            conn.execute("INSERT INTO users (username,password_hash,salt,role,nama) VALUES (?,?,?,'guru',?)",
-                         (f["username"].strip(), ph, salt, f["nama"].strip()))
-            conn.commit(); conn.close()
-            return self.redirect("/admin/guru", "Guru ditambahkan.")
-        except sqlite3.IntegrityError:
-            return self.redirect("/admin/guru", "Username sudah dipakai.")
-
-    def _get_guru(self, conn, gid):
-        return conn.execute("SELECT * FROM users WHERE id=? AND role='guru'", (gid,)).fetchone()
-
-    def admin_guru_edit(self, user, gid, flash):
-        conn = db()
-        g = self._get_guru(conn, gid)
-        conn.close()
-        if not g:
-            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
-        body = f"""<h2>Edit Guru</h2>
-        <form method="post" action="/admin/guru/{g['id']}/edit">
-          <label>Nama <input name="nama" value="{esc(g['nama'])}" required></label>
-          <label>Username <input name="username" value="{esc(g['username'])}" required></label>
-          <label>Password baru (kosongkan jika tidak diganti)
-            <input name="password" type="password" minlength="8"></label>
-          <button type="submit">Simpan Perubahan</button></form>
-        <p><a href="/admin/guru">Kembali ke daftar guru</a></p>"""
-        return self.send_html(layout(user, "Edit Guru", body, flash))
-
-    def post_admin_guru_edit(self, gid, f):
-        conn = db()
-        g = self._get_guru(conn, gid)
-        if not g:
-            conn.close()
-            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
-        try:
-            pw = f.get("password", "")
-            if pw:
-                ph, salt = hash_password(pw)
-                conn.execute("UPDATE users SET nama=?, username=?, password_hash=?, salt=? WHERE id=?",
-                             (f["nama"].strip(), f["username"].strip(), ph, salt, gid))
-            else:
-                conn.execute("UPDATE users SET nama=?, username=? WHERE id=?",
-                             (f["nama"].strip(), f["username"].strip(), gid))
-            conn.commit(); conn.close()
-            return self.redirect("/admin/guru", "Guru diperbarui.")
-        except sqlite3.IntegrityError:
-            conn.close()
-            return self.redirect(f"/admin/guru/{gid}/edit", "Username sudah dipakai.")
-
-    def post_admin_guru_hapus(self, gid):
-        conn = db()
-        g = self._get_guru(conn, gid)
-        if not g:
-            conn.close()
-            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
-        jml_sesi = conn.execute("SELECT COUNT(*) c FROM sessions WHERE teacher_id=?",
-                                (gid,)).fetchone()["c"]
-        jml_catat = conn.execute("SELECT COUNT(*) c FROM attendance WHERE recorded_by=?",
-                                 (gid,)).fetchone()["c"]
-        if jml_sesi or jml_catat:
-            # Sudah punya riwayat absen: jangan hapus, cukup nonaktifkan agar
-            # sesi dan catatan absennya tetap tersimpan.
-            conn.execute("UPDATE users SET aktif=0 WHERE id=?", (gid,))
-            conn.commit(); conn.close()
-            return self.redirect("/admin/guru",
-                                 "Guru dinonaktifkan karena sudah punya riwayat sesi absen. "
-                                 "Riwayat absennya tetap tersimpan.")
-        # Belum punya riwayat: hapus permanen (penugasan dulu, baru akunnya, satu transaksi).
-        conn.execute("DELETE FROM assignments WHERE user_id=?", (gid,))
-        conn.execute("DELETE FROM users WHERE id=?", (gid,))
-        conn.commit(); conn.close()
-        return self.redirect("/admin/guru", "Guru dihapus.")
-
-    def post_admin_guru_aktifkan(self, gid):
-        conn = db()
-        g = self._get_guru(conn, gid)
-        if not g:
-            conn.close()
-            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
-        conn.execute("UPDATE users SET aktif=1 WHERE id=?", (gid,))
-        conn.commit(); conn.close()
-        return self.redirect("/admin/guru", "Guru diaktifkan kembali.")
-
-    # -- admin: kelas & mapel (pola sama) -----------------------------------
-    def _simple_list(self, user, flash, table, title, action, label):
-        conn = db()
-        rows = conn.execute(f"SELECT * FROM {table} ORDER BY nama").fetchall()
-        conn.close()
-        items = ""
-        for r in rows:
-            nama_js = r["nama"].replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
-            confirm_msg = f"Hapus {label.lower()} {nama_js}?"
-            items += (
-                f'<li>{esc(r["nama"])} '
-                f'&mdash; <a href="{action}/{r["id"]}/edit">Edit</a> '
-                f'<form method="post" action="{action}/{r["id"]}/hapus" class="inline" '
-                f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                f'<button type="submit">Hapus</button></form></li>')
-        items = items or "<li>Belum ada data.</li>"
-        body = f"""<h2>{esc(title)}</h2><ul>{items}</ul>
-        <form method="post" action="{action}">
-          <label>Nama baru <input name="nama" required></label>
-          <button type="submit">Tambah</button></form>"""
-        return self.send_html(layout(user, title, body, flash))
-
-    def admin_kelas(self, user, flash):
-        return self._simple_list(user, flash, "classes", "Kelola Kelas", "/admin/kelas", "Kelas")
-
-    def admin_mapel(self, user, flash):
-        return self._simple_list(user, flash, "subjects", "Kelola Mata Pelajaran", "/admin/mapel", "Mapel")
-
-    def _post_simple(self, table, f, back):
-        try:
-            conn = db()
-            conn.execute(f"INSERT INTO {table} (nama) VALUES (?)", (f["nama"].strip(),))
-            conn.commit(); conn.close()
-            return self.redirect(back, "Data ditambahkan.")
-        except sqlite3.IntegrityError:
-            return self.redirect(back, "Nama sudah ada.")
-
-    def post_admin_kelas(self, f):
-        return self._post_simple("classes", f, "/admin/kelas")
-
-    def post_admin_mapel(self, f):
-        return self._post_simple("subjects", f, "/admin/mapel")
-
-    def _simple_edit(self, user, table, action, label, item_id, flash):
-        conn = db()
-        row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (item_id,)).fetchone()
-        conn.close()
-        if not row:
-            return self.redirect(action, "Data tidak ditemukan.")
-        body = f"""<h2>Edit {esc(label)}</h2>
-        <form method="post" action="{action}/{row['id']}/edit">
-          <label>Nama <input name="nama" value="{esc(row['nama'])}" required></label>
-          <button type="submit">Simpan Perubahan</button></form>
-        <p><a href="{action}">Kembali ke daftar {esc(label.lower())}</a></p>"""
-        return self.send_html(layout(user, f"Edit {label}", body, flash))
-
-    def admin_kelas_edit(self, user, kid, flash):
-        return self._simple_edit(user, "classes", "/admin/kelas", "Kelas", kid, flash)
-
-    def admin_mapel_edit(self, user, mid, flash):
-        return self._simple_edit(user, "subjects", "/admin/mapel", "Mapel", mid, flash)
-
-    def _post_simple_edit(self, table, action, label, item_id, f):
-        conn = db()
-        row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (item_id,)).fetchone()
-        if not row:
-            conn.close()
-            return self.redirect(action, "Data tidak ditemukan.")
-        try:
-            conn.execute(f"UPDATE {table} SET nama=? WHERE id=?",
-                         (f["nama"].strip(), item_id))
-            conn.commit(); conn.close()
-            return self.redirect(action, f"{label} diperbarui.")
-        except sqlite3.IntegrityError:
-            conn.close()
-            return self.redirect(f"{action}/{item_id}/edit", "Nama sudah ada.")
-
-    def post_admin_kelas_edit(self, kid, f):
-        return self._post_simple_edit("classes", "/admin/kelas", "Kelas", kid, f)
-
-    def post_admin_mapel_edit(self, mid, f):
-        return self._post_simple_edit("subjects", "/admin/mapel", "Mapel", mid, f)
-
-    def _post_simple_hapus(self, table, action, label, item_id, refs):
-        conn = db()
-        row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (item_id,)).fetchone()
-        if not row:
-            conn.close()
-            return self.redirect(action, "Data tidak ditemukan.")
-        # Hapus aman: tolak bila data ini masih dipakai tabel lain, agar riwayat
-        # absen (sesi) dan relasi data tidak rusak.
-        dipakai = []
-        for ref_table, ref_col, sebutan in refs:
-            jml = conn.execute(f"SELECT COUNT(*) c FROM {ref_table} WHERE {ref_col}=?",
-                               (item_id,)).fetchone()["c"]
-            if jml:
-                dipakai.append(sebutan)
-        if dipakai:
-            conn.close()
-            return self.redirect(
-                action,
-                f"{label} tidak bisa dihapus karena masih dipakai "
-                f"(ada {'/'.join(dipakai)}). Hapus atau pindahkan dulu data "
-                f"yang memakai {label.lower()} ini.")
-        conn.execute(f"DELETE FROM {table} WHERE id=?", (item_id,))
-        conn.commit(); conn.close()
-        return self.redirect(action, f"{label} dihapus.")
-
-    def post_admin_kelas_hapus(self, kid):
-        return self._post_simple_hapus(
-            "classes", "/admin/kelas", "Kelas", kid,
-            [("students", "class_id", "siswa"), ("sessions", "class_id", "sesi"),
-             ("assignments", "class_id", "penugasan")])
-
-    def post_admin_mapel_hapus(self, mid):
-        return self._post_simple_hapus(
-            "subjects", "/admin/mapel", "Mapel", mid,
-            [("sessions", "subject_id", "sesi"), ("assignments", "subject_id", "penugasan")])
-
-    # -- admin: siswa --------------------------------------------------------
-    def admin_siswa(self, user, qs, flash):
-        conn = db()
-        classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
-        class_opts = "".join(f'<option value="{c["id"]}">{esc(c["nama"])}</option>' for c in classes)
-        rows = conn.execute(
-            """SELECT s.*, c.nama kelas FROM students s JOIN classes c ON c.id=s.class_id
-               ORDER BY c.nama, s.nama""").fetchall()
-        conn.close()
-        items = ""
-        for r in rows:
-            nama_js = r["nama"].replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
-            confirm_msg = f"Hapus siswa {nama_js}? Catatan absennya juga akan terhapus."
-            items += (
-                f'<li>{esc(r["nama"])} &mdash; kode: <code>{esc(r["kode"])}</code> &mdash; {esc(r["kelas"])} '
-                f'&mdash; <a href="/cetak/{r["class_id"]}">Cetak kartu kelas ini</a> '
-                f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
-                f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
-                f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                f'<button type="submit">Hapus</button></form></li>')
-        items = items or "<li>Belum ada siswa.</li>"
-        body = f"""<h2>Kelola Siswa</h2><ul>{items}</ul>
-        <h3>Tambah Siswa</h3>
-        <form method="post" action="/admin/siswa">
-          <label>Nama <input name="nama" required></label>
-          <label>Kode unik / NIS <input name="kode" required></label>
-          <label>Kelas <select name="class_id">{class_opts}</select></label>
-          <button type="submit">Tambah Siswa</button></form>"""
-        return self.send_html(layout(user, "Siswa", body, flash))
-
-    def post_admin_siswa(self, f):
-        try:
-            conn = db()
-            conn.execute("INSERT INTO students (nama,kode,class_id) VALUES (?,?,?)",
-                         (f["nama"].strip(), f["kode"].strip(), int(f["class_id"])))
-            conn.commit(); conn.close()
-            return self.redirect("/admin/siswa", "Siswa ditambahkan.")
-        except sqlite3.IntegrityError:
-            return self.redirect("/admin/siswa", "Kode siswa sudah dipakai.")
-
-    def admin_siswa_edit(self, user, sid, flash):
-        conn = db()
-        st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
-        if not st:
-            conn.close()
-            return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
-        classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
-        conn.close()
-        class_opts = "".join(
-            f'<option value="{c["id"]}"{" selected" if c["id"] == st["class_id"] else ""}>'
-            f'{esc(c["nama"])}</option>' for c in classes)
-        body = f"""<h2>Edit Siswa</h2>
-        <form method="post" action="/admin/siswa/{st['id']}/edit">
-          <label>Nama <input name="nama" value="{esc(st['nama'])}" required></label>
-          <label>Kode unik / NIS <input name="kode" value="{esc(st['kode'])}" required></label>
-          <label>Kelas <select name="class_id">{class_opts}</select></label>
-          <button type="submit">Simpan Perubahan</button></form>
-        <p><a href="/admin/siswa">Kembali ke daftar siswa</a></p>"""
-        return self.send_html(layout(user, "Edit Siswa", body, flash))
-
-    def post_admin_siswa_edit(self, sid, f):
-        conn = db()
-        st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
-        if not st:
-            conn.close()
-            return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
-        try:
-            conn.execute("UPDATE students SET nama=?, kode=?, class_id=? WHERE id=?",
-                         (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]), sid))
-            conn.commit(); conn.close()
-            return self.redirect("/admin/siswa", "Siswa diperbarui.")
-        except sqlite3.IntegrityError:
-            conn.close()
-            return self.redirect(f"/admin/siswa/{sid}/edit", "Kode siswa sudah dipakai.")
-
-    def post_admin_siswa_hapus(self, sid):
-        conn = db()
-        st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
-        if not st:
-            conn.close()
-            return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
-        # Satu transaksi: hapus catatan absen siswa dulu, baru siswanya.
-        conn.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
-        conn.execute("DELETE FROM students WHERE id=?", (sid,))
-        conn.commit(); conn.close()
-        return self.redirect("/admin/siswa", "Siswa dihapus.")
-
-    # -- admin: penugasan -----------------------------------------------------
-    def admin_penugasan(self, user, flash):
-        conn = db()
-        guru = conn.execute("SELECT * FROM users WHERE role='guru' AND aktif=1 ORDER BY nama").fetchall()
-        kelas = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
-        mapel = conn.execute("SELECT * FROM subjects ORDER BY nama").fetchall()
-        rows = conn.execute(
-            """SELECT a.*, u.nama guru, c.nama kelas, s.nama mapel FROM assignments a
-               JOIN users u ON u.id=a.user_id JOIN classes c ON c.id=a.class_id
-               JOIN subjects s ON s.id=a.subject_id ORDER BY u.nama, c.nama, s.nama""").fetchall()
-        conn.close()
-        def opts(rows_, label):
-            return "".join(f'<option value="{r["id"]}">{esc(r[label])}</option>' for r in rows_)
-        items = ""
-        for r in rows:
-            combo_js = (f"{r['guru']} — {r['kelas']} — {r['mapel']}"
-                        .replace("\\", "\\\\").replace("'", "\\'").replace("\n", " "))
-            confirm_msg = f"Hapus penugasan {combo_js}?"
-            items += (
-                f'<li>{esc(r["guru"])} &mdash; {esc(r["kelas"])} &mdash; {esc(r["mapel"])} '
-                f'&mdash; <a href="/admin/penugasan/{r["id"]}/edit">Edit</a> '
-                f'<form method="post" action="/admin/penugasan/{r["id"]}/hapus" class="inline" '
-                f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                f'<button type="submit">Hapus</button></form></li>')
-        items = items or "<li>Belum ada penugasan.</li>"
-        body = f"""<h2>Penugasan Guru</h2><ul>{items}</ul>
-        <form method="post" action="/admin/penugasan">
-          <label>Guru <select name="user_id">{opts(guru, 'nama')}</select></label>
-          <label>Kelas <select name="class_id">{opts(kelas, 'nama')}</select></label>
-          <label>Mapel <select name="subject_id">{opts(mapel, 'nama')}</select></label>
-          <button type="submit">Simpan Penugasan</button></form>"""
-        return self.send_html(layout(user, "Penugasan", body, flash))
-
-    def post_admin_penugasan(self, f):
-        try:
-            conn = db()
-            conn.execute("INSERT INTO assignments (user_id,class_id,subject_id) VALUES (?,?,?)",
-                         (int(f["user_id"]), int(f["class_id"]), int(f["subject_id"])))
-            conn.commit(); conn.close()
-            return self.redirect("/admin/penugasan", "Penugasan disimpan.")
-        except sqlite3.IntegrityError:
-            return self.redirect("/admin/penugasan", "Penugasan itu sudah ada.")
-
-    def admin_penugasan_edit(self, user, aid, flash):
-        conn = db()
-        a = conn.execute("SELECT * FROM assignments WHERE id=?", (aid,)).fetchone()
-        if not a:
-            conn.close()
-            return self.redirect("/admin/penugasan", "Data tidak ditemukan.")
-        guru = conn.execute("SELECT * FROM users WHERE role='guru' AND aktif=1 ORDER BY nama").fetchall()
-        if not any(g["id"] == a["user_id"] for g in guru):
-            # Guru pemilik penugasan ini sedang nonaktif: tetap tampilkan di pilihan
-            # agar nilai awal formulir tidak diam-diam berubah.
-            pemilik = conn.execute("SELECT * FROM users WHERE id=?", (a["user_id"],)).fetchone()
-            if pemilik:
-                guru = list(guru) + [pemilik]
-        kelas = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
-        mapel = conn.execute("SELECT * FROM subjects ORDER BY nama").fetchall()
-        conn.close()
-        def opts(rows_, label, terpilih):
-            return "".join(
-                f'<option value="{r["id"]}"{" selected" if r["id"] == terpilih else ""}>'
-                f'{esc(r[label])}</option>' for r in rows_)
-        body = f"""<h2>Edit Penugasan</h2>
-        <form method="post" action="/admin/penugasan/{a['id']}/edit">
-          <label>Guru <select name="user_id">{opts(guru, 'nama', a['user_id'])}</select></label>
-          <label>Kelas <select name="class_id">{opts(kelas, 'nama', a['class_id'])}</select></label>
-          <label>Mapel <select name="subject_id">{opts(mapel, 'nama', a['subject_id'])}</select></label>
-          <button type="submit">Simpan Perubahan</button></form>
-        <p><a href="/admin/penugasan">Kembali ke daftar penugasan</a></p>"""
-        return self.send_html(layout(user, "Edit Penugasan", body, flash))
-
-    def post_admin_penugasan_edit(self, aid, f):
-        conn = db()
-        a = conn.execute("SELECT * FROM assignments WHERE id=?", (aid,)).fetchone()
-        if not a:
-            conn.close()
-            return self.redirect("/admin/penugasan", "Data tidak ditemukan.")
-        try:
-            conn.execute("UPDATE assignments SET user_id=?, class_id=?, subject_id=? WHERE id=?",
-                         (int(f["user_id"]), int(f["class_id"]), int(f["subject_id"]), aid))
-            conn.commit(); conn.close()
-            return self.redirect("/admin/penugasan", "Penugasan diperbarui.")
-        except sqlite3.IntegrityError:
-            conn.close()
-            return self.redirect(f"/admin/penugasan/{aid}/edit", "Penugasan itu sudah ada.")
-
-    def post_admin_penugasan_hapus(self, aid):
-        conn = db()
-        a = conn.execute("SELECT * FROM assignments WHERE id=?", (aid,)).fetchone()
-        if not a:
-            conn.close()
-            return self.redirect("/admin/penugasan", "Data tidak ditemukan.")
-        # Hanya baris penugasan yang dihapus; sesi absen yang sudah ada tidak disentuh.
-        conn.execute("DELETE FROM assignments WHERE id=?", (aid,))
-        conn.commit(); conn.close()
-        return self.redirect("/admin/penugasan", "Penugasan dihapus.")
-
-
-    # -- guru: sesi -----------------------------------------------------------
-    def _assignments_of(self, conn, user_id):
-        return conn.execute(
-            """SELECT a.*, c.nama kelas, s.nama mapel FROM assignments a
-               JOIN classes c ON c.id=a.class_id JOIN subjects s ON s.id=a.subject_id
-               WHERE a.user_id=? ORDER BY c.nama, s.nama""", (user_id,)).fetchall()
-
-    def guru_sesi(self, user, flash):
-        conn = db()
-        assigns = self._assignments_of(conn, user["id"])
-        rows = conn.execute(
-            """SELECT s.*, c.nama kelas, sub.nama mapel FROM sessions s
-               JOIN classes c ON c.id=s.class_id JOIN subjects sub ON sub.id=s.subject_id
-               WHERE s.teacher_id=? ORDER BY s.id DESC""", (user["id"],)).fetchall()
-        conn.close()
-        combo_opts = "".join(
-            f'<option value="{a["class_id"]}:{a["subject_id"]}">{esc(a["kelas"])} - {esc(a["mapel"])}</option>'
-            for a in assigns)
-        today = datetime.now().strftime("%Y-%m-%d")
-        nowtime = datetime.now().strftime("%H:%M")
+        def stat(ic, warna, angka, label):
+            return (f'<div class="stat-card"><span class="stat-ic {warna}">{icon(ic)}</span>'
+                    f'<span class="stat-txt"><b>{angka}</b><small>{esc(label)}</small></span></div>')
+        cards = "".join([
+            stat("check", "hijau", hitung[("siswa", "Hadir")], "Siswa Hadir"),
+            stat("clock", "kuning", hitung[("siswa", "Terlambat")], "Siswa Terlambat"),
+            stat("users", "biru", hitung[("siswa", "Sakit")] + hitung[("siswa", "Izin")],
+                 "Siswa Sakit/Izin"),
+            stat("x", "merah", hitung[("siswa", "Alpa")], "Siswa Alpa"),
+            stat("scan", "ungu", belum, "Siswa Belum Scan"),
+            stat("badge", "indigo", hitung[("guru", "Hadir")] + hitung[("guru", "Terlambat")],
+                 "Guru Hadir"),
+        ])
         items = "".join(
-            f'<li><a href="/sesi/{r["id"]}">{esc(r["tanggal"])} {esc(r["jam_mulai"])} &bull; '
-            f'{esc(r["kelas"])} &bull; {esc(r["mapel"])} &bull; {esc(r["status"])}</a></li>'
-            for r in rows) or "<li>Belum ada sesi.</li>"
-        form = ("""<h3>Buat Sesi Baru</h3>
-        <form method="post" action="/guru/sesi/buat">
-          <label>Kelas - Mapel (sesuai penugasan) <select name="combo">%s</select></label>
-          <label>Tanggal <input name="tanggal" type="date" value="%s" required></label>
-          <label>Jam mulai <input name="jam_mulai" type="time" value="%s" required></label>
-          <label>Batas terlambat (menit setelah jam mulai)
-            <input name="batas_terlambat_menit" type="number" value="15" min="0" required></label>
-          <button type="submit">Buat &amp; Buka Sesi</button></form>""" % (combo_opts, today, nowtime)) \
-            if assigns else "<p>Anda belum punya penugasan. Minta admin menambahkan penugasan dulu.</p>"
-        body = f"<h2>Sesi Saya</h2><ul>{items}</ul>{form}"
-        return self.send_html(layout(user, "Sesi Saya", body, flash))
+            f'<li><span class="pill p-{r["status"].lower()}">{esc(r["status"])}</span> '
+            f'<b>{esc(r["nama"])}</b> <span class="muted">{esc(r["sub"] or "")}</span> '
+            f'<span class="jam">{esc(r["jam"] or "")}</span></li>' for r in datang)
+        items = items or '<li class="muted">Belum ada yang scan hari ini.</li>'
+        warn = ""
+        if user["role"] == "admin" and verify_password("admin123", user["password_hash"], user["salt"]):
+            warn = ('<div class="flash warn">PERINGATAN: akun admin ini masih memakai '
+                    'password awal lokal. Segera ganti lewat menu Ganti Password '
+                    'sebelum dipakai beneran.</div>')
+        body = f"""<h2>Dashboard</h2>
+        <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))} &bull;
+        batas Hadir {JAM_BATAS_HADIR.strftime('%H:%M')}, Alpa otomatis {JAM_BATAS_ALPA.strftime('%H:%M')}</p>
+        {warn}<div class="stat-grid">{cards}</div>
+        <div class="quick-grid">
+          <a class="quick-card" href="/scan-gerbang">{icon('scan')}<span>Scan Gerbang</span></a>
+          <a class="quick-card" href="/tabel-siswa">{icon('users')}<span>Tabel Siswa</span></a>
+          <a class="quick-card" href="/tabel-guru">{icon('badge')}<span>Tabel Guru</span></a>
+        </div>
+        <section class="card"><h3>Kedatangan Terakhir Hari Ini</h3>
+        <ul class="arrivals">{items}</ul></section>"""
+        return self.send_html(layout(user, "Dashboard", body, flash, aktif="dashboard"))
 
-    def post_buat_sesi(self, user, f):
-        class_id, subject_id = (int(x) for x in f["combo"].split(":"))
-        conn = db()
-        allowed = conn.execute("SELECT 1 FROM assignments WHERE user_id=? AND class_id=? AND subject_id=?",
-                               (user["id"], class_id, subject_id)).fetchone()
-        if not allowed:
-            conn.close()
-            return self.redirect("/guru/sesi", "Kombinasi kelas-mapel itu bukan penugasan Anda.")
-        cur = conn.execute(
-            """INSERT INTO sessions (class_id,subject_id,teacher_id,tanggal,jam_mulai,batas_terlambat_menit)
-               VALUES (?,?,?,?,?,?)""",
-            (class_id, subject_id, user["id"], f["tanggal"], f["jam_mulai"],
-             int(f["batas_terlambat_menit"])))
-        conn.commit()
-        sid = cur.lastrowid
-        conn.close()
-        return self.redirect(f"/sesi/{sid}", "Sesi dibuka. Silakan scan QR siswa.")
-
-    def _get_session_for_teacher(self, conn, user, sid):
+    # -- scan gerbang -----------------------------------------------------------
+    def _kedatangan_hari_ini(self, conn, tgl):
         return conn.execute(
-            """SELECT s.*, c.nama kelas, sub.nama mapel FROM sessions s
-               JOIN classes c ON c.id=s.class_id JOIN subjects sub ON sub.id=s.subject_id
-               WHERE s.id=? AND s.teacher_id=?""", (sid, user["id"])).fetchone()
+            """SELECT k.status, k.jam, s.nama AS nama, c.nama AS sub, 'Siswa' AS tipe
+               FROM kehadiran k JOIN students s ON s.id=k.ref_id
+               JOIN classes c ON c.id=s.class_id
+               WHERE k.tanggal=? AND k.ref_type='siswa' AND k.metode='scan'
+               UNION ALL
+               SELECT k.status, k.jam, u.nama, u.mapel, 'Guru'
+               FROM kehadiran k JOIN users u ON u.id=k.ref_id
+               WHERE k.tanggal=? AND k.ref_type='guru' AND k.metode='scan'
+               ORDER BY jam DESC""", (tgl, tgl)).fetchall()
 
-    def sesi_detail(self, user, sid, flash):
+    def scan_gerbang(self, user, flash, hasil=None):
+        now = waktu_sekarang()
+        tgl = now.strftime("%Y-%m-%d")
         conn = db()
-        s = self._get_session_for_teacher(conn, user, sid)
-        if not s:
-            conn.close()
-            return self.send_html(layout(user, "404", "<p>Sesi tidak ditemukan / bukan milik Anda.</p>"), status=404)
-        students = conn.execute(
-            """SELECT st.*, a.status, a.metode, a.waktu FROM students st
-               LEFT JOIN attendance a ON a.student_id=st.id AND a.session_id=?
-               WHERE st.class_id=? ORDER BY st.nama""", (sid, s["class_id"])).fetchall()
+        datang = self._kedatangan_hari_ini(conn, tgl)
         conn.close()
-        rows_html, demo_btns = "", ""
-        for st in students:
-            status = st["status"] or "-"
-            manual_form = ""
-            if s["status"] == "buka":
-                manual_form = f"""<form method="post" action="/sesi/{sid}/manual" class="inline">
-                  <input type="hidden" name="student_id" value="{st['id']}">
-                  <select name="status"><option>Hadir</option><option>Terlambat</option>
-                  <option>Sakit</option><option>Izin</option><option>Alpa</option></select>
-                  <button type="submit">Simpan</button></form>"""
-                demo_btns += f"""<form method="post" action="/sesi/{sid}/scan" class="inline">
-                  <input type="hidden" name="kode" value="{esc(st['kode'])}">
-                  <input type="hidden" name="metode" value="demo">
-                  <button type="submit">Simulasikan scan: {esc(st['nama'])}</button></form>"""
-            rows_html += (f'<li>{esc(st["nama"])} (<code>{esc(st["kode"])}</code>) &mdash; '
-                          f'<b>{esc(status)}</b> {esc(st["metode"] or "")} {esc(st["waktu"] or "")} {manual_form}</li>')
-        scan_ui = ""
-        if s["status"] == "buka":
-            scan_ui = f"""<section class="panel"><h3>Scan QR di Dalam Aplikasi</h3>
-            <video id="cam" autoplay playsinline muted></video>
-            <div><button type="button" id="btnCam">Mulai Kamera</button>
-            <button type="button" id="btnStop" disabled>Stop Kamera</button></div>
-            <p id="scanStatus"><small>Kamera memakai getUserMedia + jsQR. Jika kamera tidak tersedia,
-            pakai ketik kode manual atau mode demo di bawah.</small></p>
-            <form method="post" action="/sesi/{sid}/scan" id="scanForm">
-              <label>Kode siswa (hasil scan / ketik manual)
-                <input name="kode" id="kodeInput" required autocomplete="off"></label>
-              <input type="hidden" name="metode" id="metodeInput" value="scan">
-              <button type="submit">Catat dari Kode</button></form></section>
-            <section class="panel"><h3>Mode Demo / Simulasi Scan</h3>{demo_btns}</section>
-            <form method="post" action="/sesi/{sid}/tutup"
-              onsubmit="return confirm('Tutup sesi? Siswa yang belum tercatat akan menjadi Alpa.')">
-              <button type="submit" class="danger">Tutup Sesi (yang belum tercatat = Alpa)</button></form>
-            <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-            <script src="/static/app.js"></script>"""
-        body = f"""<h2>Sesi: {esc(s['kelas'])} - {esc(s['mapel'])}</h2>
-        <p>{esc(s['tanggal'])} jam {esc(s['jam_mulai'])} &bull; batas terlambat
-        {s['batas_terlambat_menit']} menit &bull; status sesi: <b>{esc(s['status'])}</b></p>
-        {scan_ui}<h3>Daftar Siswa</h3><ul>{rows_html}</ul>"""
-        return self.send_html(layout(user, "Sesi", body, flash))
+        hasil_html = ""
+        if hasil:
+            hasil_html = (f'<div class="hasil hasil-{hasil["jenis"]}">'
+                          f'<div class="hasil-nama">{esc(hasil["judul"])}</div>'
+                          f'<div class="hasil-meta">{esc(hasil["pesan"])}</div></div>')
+        items = "".join(
+            f'<li><span class="pill p-{r["status"].lower()}">{esc(r["status"])}</span> '
+            f'<b>{esc(r["nama"])}</b> <span class="muted">{esc(r["tipe"])} &bull; '
+            f'{esc(r["sub"] or "")}</span> <span class="jam">{esc(r["jam"] or "")}</span></li>'
+            for r in datang)
+        items = items or '<li class="muted">Belum ada yang scan hari ini.</li>'
+        body = f"""<h2>Scan Gerbang</h2>
+        <p class="muted">{esc(NAMA_HARI[now.weekday()])}, {esc(fmt_tanggal(now.date()))} &bull;
+        pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; 07:00 = Hadir, lewat = Terlambat</p>
+        {hasil_html}
+        <section class="card scan-card">
+          <div class="scan-frame"><video id="cam" autoplay playsinline muted></video></div>
+          <div class="scan-btns"><button type="button" id="btnCam" class="btn btn-primary">Mulai Kamera</button>
+          <button type="button" id="btnStop" class="btn btn-ghost" disabled>Stop Kamera</button></div>
+          <p id="scanStatus" class="muted"><small>Kamera memakai getUserMedia + jsQR.
+          Arahkan kartu QR siswa/guru ke kamera. Bila kamera tidak tersedia, ketik NIS / kode guru di bawah.</small></p>
+          <form method="post" action="/api/scan" id="scanForm">
+            <label>NIS siswa / kode QR guru (hasil scan / ketik manual)
+              <input name="kode" id="kodeInput" required autocomplete="off"></label>
+            <button type="submit" class="btn btn-primary">Catat dari Kode</button></form>
+        </section>
+        <section class="card"><h3>Sudah Scan Hari Ini ({len(datang)})</h3>
+        <ul class="arrivals">{items}</ul></section>
+        <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+        <script src="/static/app.js"></script>"""
+        return self.send_html(layout(user, "Scan Gerbang", body, flash, aktif="scan"))
 
-    def _record(self, conn, user, s, student, metode, forced_status=None):
-        """Catat satu kehadiran. Kembalikan pesan untuk guru."""
-        existing = conn.execute("SELECT status FROM attendance WHERE session_id=? AND student_id=?",
-                                (s["id"], student["id"])).fetchone()
-        if existing:
-            return f"{student['nama']} sudah tercatat: {existing['status']} (scan ganda diabaikan)."
-        now = datetime.now()
-        if forced_status:
-            status = forced_status
-        else:
-            mulai = datetime.strptime(f"{s['tanggal']} {s['jam_mulai']}", "%Y-%m-%d %H:%M")
-            batas = mulai + timedelta(minutes=int(s["batas_terlambat_menit"]))
-            status = "Terlambat" if now > batas else "Hadir"
-        conn.execute(
-            """INSERT INTO attendance (session_id,student_id,status,metode,waktu,recorded_by)
-               VALUES (?,?,?,?,?,?)""",
-            (s["id"], student["id"], status, metode, now.strftime("%Y-%m-%d %H:%M:%S"), user["id"]))
-        conn.commit()
-        return f"{status} - {student['nama']} - dicatat pukul {now.strftime('%H:%M:%S')} ({metode})."
-
-    def post_scan(self, user, sid, f):
-        conn = db()
-        s = self._get_session_for_teacher(conn, user, sid)
-        if not s or s["status"] != "buka":
-            conn.close()
-            return self.redirect("/guru/sesi", "Sesi tidak ditemukan / sudah ditutup.")
+    def post_scan(self, user, f):
         kode = (f.get("kode") or "").strip()
-        student = conn.execute("SELECT * FROM students WHERE kode=?", (kode,)).fetchone()
-        if not student:
-            conn.close()
-            return self.redirect(f"/sesi/{sid}", f"Kode '{kode}' tidak dikenal.")
-        if student["class_id"] != s["class_id"]:
-            conn.close()
-            return self.redirect(f"/sesi/{sid}", f"Kode '{kode}' milik kelas lain, ditolak.")
-        metode = f.get("metode") if f.get("metode") in ("scan", "demo") else "scan"
-        msg = self._record(conn, user, s, student, metode)
-        conn.close()
-        return self.redirect(f"/sesi/{sid}", msg)
-
-    def post_manual(self, user, sid, f):
+        now = waktu_sekarang()
+        tgl = now.strftime("%Y-%m-%d")
+        jam = now.strftime("%H:%M")
         conn = db()
-        s = self._get_session_for_teacher(conn, user, sid)
-        if not s or s["status"] != "buka":
+        siswa = conn.execute(
+            """SELECT s.*, c.nama AS kelas FROM students s JOIN classes c ON c.id=s.class_id
+               WHERE s.kode=?""", (kode,)).fetchone()
+        guru_row = None
+        if not siswa:
+            guru_row = conn.execute(
+                "SELECT * FROM users WHERE kode_qr=? AND role='guru' AND aktif=1",
+                (kode,)).fetchone()
+        if not siswa and not guru_row:
             conn.close()
-            return self.redirect("/guru/sesi", "Sesi tidak ditemukan / sudah ditutup.")
-        student = conn.execute("SELECT * FROM students WHERE id=? AND class_id=?",
-                               (int(f["student_id"]), s["class_id"])).fetchone()
-        if not student:
-            conn.close()
-            return self.redirect(f"/sesi/{sid}", "Siswa tidak ditemukan di kelas ini.")
-        status = f["status"]
+            return self.scan_gerbang(user, "", hasil={
+                "jenis": "error", "judul": "Kode tidak dikenal.",
+                "pesan": f"Kode '{kode}' tidak terdaftar sebagai NIS siswa maupun kode guru."})
+        if siswa:
+            ref_type, ref_id, nama = "siswa", siswa["id"], siswa["nama"]
+            sub = siswa["kelas"]
+        else:
+            ref_type, ref_id, nama = "guru", guru_row["id"], guru_row["nama"]
+            sub = guru_row["mapel"] or ""
+        # Bila sudah lewat 09:00, Alpa otomatis mungkin sudah terisi untuk hari
+        # ini; scan tetap boleh menggantikannya (orangnya benar-benar datang).
+        pastikan_alpa(conn, tgl)
+        ada = conn.execute(
+            "SELECT * FROM kehadiran WHERE tanggal=? AND ref_type=? AND ref_id=?",
+            (tgl, ref_type, ref_id)).fetchone()
+        if ada:
+            if ada["metode"] == "scan":
+                conn.close()
+                return self.scan_gerbang(user, "", hasil={
+                    "jenis": "info", "judul": "Sudah tercatat",
+                    "pesan": f"{nama} sudah tercatat {ada['status']} pukul {ada['jam'] or '-'} hari ini."})
+            if ada["status"] in ("Sakit", "Izin"):
+                conn.close()
+                return self.scan_gerbang(user, "", hasil={
+                    "jenis": "info", "judul": f"{nama} ditandai {ada['status']}",
+                    "pesan": f"{nama} hari ini ditandai {ada['status']} (manual), scan tidak mengubahnya."})
+            if ada["metode"] == "manual":
+                conn.close()
+                return self.scan_gerbang(user, "", hasil={
+                    "jenis": "info", "judul": "Sudah tercatat",
+                    "pesan": f"{nama} sudah tercatat {ada['status']} (manual) hari ini."})
+            # metode 'auto' (Alpa otomatis) -> ganti dengan catatan scan di bawah.
+            conn.execute("DELETE FROM kehadiran WHERE id=?", (ada["id"],))
+        status = "Hadir" if now.time() <= JAM_BATAS_HADIR else "Terlambat"
         conn.execute(
-            """INSERT INTO attendance (session_id,student_id,status,metode,waktu,recorded_by)
-               VALUES (?,?,?,'manual',?,?)
-               ON CONFLICT(session_id,student_id) DO UPDATE SET status=excluded.status, metode='manual'""",
-            (sid, student["id"], status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user["id"]))
+            """INSERT INTO kehadiran (tanggal, ref_type, ref_id, status, jam, metode, dicatat_oleh)
+               VALUES (?,?,?,?,?,'scan',?)""",
+            (tgl, ref_type, ref_id, status, jam, user["id"]))
         conn.commit(); conn.close()
-        return self.redirect(f"/sesi/{sid}", f"{student['nama']} ditandai {status} (manual).")
-
-    def post_tutup(self, user, sid):
-        conn = db()
-        s = self._get_session_for_teacher(conn, user, sid)
-        if not s:
-            conn.close()
-            return self.redirect("/guru/sesi", "Sesi tidak ditemukan.")
-        cur = conn.execute(
-            """INSERT INTO attendance (session_id,student_id,status,metode,waktu,recorded_by)
-               SELECT ?, st.id, 'Alpa', 'otomatis', ?, ?
-               FROM students st WHERE st.class_id=?
-               AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.session_id=? AND a.student_id=st.id)""",
-            (sid, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user["id"], s["class_id"], sid))
-        marked = cur.rowcount
-        conn.execute("UPDATE sessions SET status='tutup' WHERE id=?", (sid,))
-        conn.commit(); conn.close()
-        return self.redirect(f"/sesi/{sid}", f"Sesi ditutup. {marked} siswa ditandai Alpa.")
+        return self.scan_gerbang(user, "", hasil={
+            "jenis": status.lower(), "judul": nama,
+            "pesan": f"{sub} • {status} • {jam}"})
 
 
-    # -- rekap ----------------------------------------------------------------
-    def _visible_sessions(self, conn, user):
-        if user["role"] == "admin":
-            return conn.execute(
-                """SELECT s.*, c.nama kelas, sub.nama mapel, u.nama guru FROM sessions s
-                   JOIN classes c ON c.id=s.class_id JOIN subjects sub ON sub.id=s.subject_id
-                   JOIN users u ON u.id=s.teacher_id ORDER BY s.id DESC""").fetchall()
-        return conn.execute(
-            """SELECT s.*, c.nama kelas, sub.nama mapel, u.nama guru FROM sessions s
-               JOIN classes c ON c.id=s.class_id JOIN subjects sub ON sub.id=s.subject_id
-               JOIN users u ON u.id=s.teacher_id WHERE s.teacher_id=? ORDER BY s.id DESC""",
-            (user["id"],)).fetchall()
+    # -- tabel mingguan ---------------------------------------------------------
+    def _parse_minggu(self, qs):
+        raw = (qs.get("minggu") or [""])[0]
+        try:
+            d = datetime.strptime(raw, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            d = waktu_sekarang().date()
+        return minggu_sen_sab(d)
 
-    def rekap(self, user, flash):
-        conn = db()
-        sessions = self._visible_sessions(conn, user)
-        blocks = ""
-        for s in sessions:
-            rows = conn.execute(
-                """SELECT st.nama, st.kode, a.status, a.metode, a.waktu FROM attendance a
-                   JOIN students st ON st.id=a.student_id WHERE a.session_id=? ORDER BY st.nama""",
-                (s["id"],)).fetchall()
-            counts = {}
-            for r in rows:
-                counts[r["status"]] = counts.get(r["status"], 0) + 1
-            ringkas = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "belum ada catatan"
-            detail = "".join(f'<li>{esc(r["nama"])} (<code>{esc(r["kode"])}</code>) - {esc(r["status"])}</li>'
-                             for r in rows)
-            blocks += f"""<section class="panel"><h3>{esc(s['tanggal'])} - {esc(s['kelas'])} -
-            {esc(s['mapel'])} (guru: {esc(s['guru'])}, sesi {esc(s['status'])})</h3>
-            <p>{esc(ringkas)} &bull; <a href="/rekap/{s['id']}/csv">Unduh CSV sesi ini</a></p>
-            <ul>{detail}</ul></section>"""
-        conn.close()
-        body = "<h2>Rekap Kehadiran</h2>" + (blocks or "<p>Belum ada sesi.</p>")
-        return self.send_html(layout(user, "Rekap", body, flash))
-
-    def rekap_csv(self, user, sid):
-        conn = db()
-        sessions = {s["id"]: s for s in self._visible_sessions(conn, user)}
-        if sid not in sessions:
-            conn.close()
-            return self.send_html(layout(user, "404", "<p>Sesi tidak ditemukan.</p>"), status=404)
+    def _peta_kehadiran(self, conn, ref_type, ref_ids, tgl_awal, tgl_akhir):
+        if not ref_ids:
+            return {}
+        tanda = ",".join("?" * len(ref_ids))
         rows = conn.execute(
-            """SELECT st.nama, st.kode, a.status, a.metode, a.waktu FROM attendance a
-               JOIN students st ON st.id=a.student_id WHERE a.session_id=? ORDER BY st.nama""",
-            (sid,)).fetchall()
+            f"""SELECT * FROM kehadiran WHERE ref_type=? AND tanggal BETWEEN ? AND ?
+                AND ref_id IN ({tanda})""",
+            (ref_type, tgl_awal, tgl_akhir, *ref_ids)).fetchall()
+        return {(r["ref_id"], r["tanggal"]): r for r in rows}
+
+    def _sel_html(self, rec, tanggal, tipe, ref_id, hari_ini):
+        link = f'/kehadiran/edit?tanggal={tanggal}&tipe={tipe}&id={ref_id}'
+        if rec:
+            jam = f'<span class="jam">{esc(fmt_jam_titik(rec["jam"]))}</span>' if rec["jam"] else ""
+            return (f'<td><a class="sel" href="{link}">'
+                    f'<span class="pill p-{rec["status"].lower()}">{esc(rec["status"])}</span>{jam}</a></td>')
+        if tanggal > hari_ini:
+            return '<td><span class="kosong">&ndash;</span></td>'
+        return f'<td><a class="sel kosong" href="{link}">&ndash;</a></td>'
+
+    def _kepala_tabel(self, hari_list):
+        th = "".join(f'<th>{NAMA_HARI[d.weekday()]}<br><small>{d.day} '
+                     f'{NAMA_BULAN_SINGKAT[d.month - 1]}</small></th>' for d in hari_list)
+        tot = "".join(f'<th class="tot">{s[0]}</th>' for s in STATUS_LIST)
+        return th, tot
+
+    def _total_bawah(self, per_hari):
+        tds = ""
+        for per_status in per_hari:
+            bagian = [f"{s[0]} {per_status[s]}" for s in STATUS_LIST if per_status.get(s)]
+            tds += f'<td class="tot-hari">{"<br>".join(bagian) or "&ndash;"}</td>'
+        return tds
+
+    def tabel_siswa(self, user, qs, flash):
+        conn = db()
+        classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
+        if not classes:
+            conn.close()
+            body = ('<h2>Tabel Siswa</h2><div class="card"><p>Belum ada kelas. '
+                    + ('Admin perlu membuat kelas dulu dari menu Kelas.'
+                       if user["role"] == "admin" else
+                       'Minta admin membuat kelas dulu.') + '</p></div>')
+            return self.send_html(layout(user, "Tabel Siswa", body, flash, aktif="tabel-siswa"))
+        kid_raw = (qs.get("kelas") or [""])[0]
+        try:
+            kid = int(kid_raw)
+        except (ValueError, TypeError):
+            kid = classes[0]["id"]
+        kelas = next((c for c in classes if c["id"] == kid), classes[0])
+        hari_list = self._parse_minggu(qs)
+        for d in hari_list:
+            pastikan_alpa(conn, d.strftime("%Y-%m-%d"))
+        students = conn.execute("SELECT * FROM students WHERE class_id=? ORDER BY nama",
+                                (kelas["id"],)).fetchall()
+        peta = self._peta_kehadiran(conn, "siswa", [s["id"] for s in students],
+                                    hari_list[0].strftime("%Y-%m-%d"),
+                                    hari_list[-1].strftime("%Y-%m-%d"))
         conn.close()
-        import csv
-        out = io.StringIO()
-        w = csv.writer(out)
-        w.writerow(["nama", "kode", "status", "metode", "waktu"])
-        for r in rows:
-            w.writerow([r["nama"], r["kode"], r["status"], r["metode"], r["waktu"]])
-        data = out.getvalue().encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/csv; charset=utf-8")
-        self.send_header("Content-Disposition", f'attachment; filename="rekap-sesi-{sid}.csv"')
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        hari_ini = waktu_sekarang().date().strftime("%Y-%m-%d")
+        th_hari, th_tot = self._kepala_tabel(hari_list)
+        opts = "".join(f'<option value="{c["id"]}"{" selected" if c["id"] == kelas["id"] else ""}>'
+                       f'{esc(c["nama"])}</option>' for c in classes)
+        senin = hari_list[0]
+        prev_m = (senin - timedelta(days=7)).strftime("%Y-%m-%d")
+        next_m = (senin + timedelta(days=7)).strftime("%Y-%m-%d")
+        base = f"/tabel-siswa?kelas={kelas['id']}"
+        rows_html = ""
+        per_hari = [dict() for _ in hari_list]
+        for i, s in enumerate(students):
+            totals = {st: 0 for st in STATUS_LIST}
+            tds = ""
+            for j, d in enumerate(hari_list):
+                tgl = d.strftime("%Y-%m-%d")
+                rec = peta.get((s["id"], tgl))
+                if rec:
+                    totals[rec["status"]] += 1
+                    per_hari[j][rec["status"]] = per_hari[j].get(rec["status"], 0) + 1
+                tds += self._sel_html(rec, tgl, "siswa", s["id"], hari_ini)
+            tot_tds = "".join(f'<td class="tot">{totals[st] or ""}</td>' for st in STATUS_LIST)
+            rows_html += (f'<tr><td class="no">{i + 1}</td>'
+                          f'<td class="nama">{esc(s["nama"])}<br>'
+                          f'<small class="muted">NIS {esc(s["kode"])}</small></td>'
+                          f'{tds}{tot_tds}</tr>')
+        rows_html = rows_html or (
+            f'<tr><td colspan="14"><div class="empty-state">{icon("users")}'
+            f'<p>Belum ada siswa di kelas ini.</p>'
+            f'<small>Siswa yang ditambahkan admin akan muncul di sini.</small></div></td></tr>')
+        total_row = (f'<tr class="total-row"><td></td><td class="nama">Total per hari</td>'
+                     f'{self._total_bawah(per_hari)}'
+                     + "".join(f'<td class="tot">{sum(per_hari[j].get(st, 0) for j in range(6)) or ""}</td>'
+                               for st in STATUS_LIST) + '</tr>')
+        body = f"""<h2>Tabel Siswa</h2>
+        <div class="card toolbar-card">
+          <form method="get" action="/tabel-siswa" class="toolbar">
+            <label>Kelas <select name="kelas">{opts}</select></label>
+            <button type="submit" class="btn btn-primary">Tampilkan</button>
+            <a class="btn btn-excel" href="/tabel-siswa/excel?kelas={kelas['id']}&minggu={senin.strftime('%Y-%m-%d')}">{icon('download')} Download Excel</a>
+          </form>
+          <div class="week-nav">
+            <a class="btn btn-ghost" href="{base}&minggu={prev_m}">&larr; Minggu lalu</a>
+            <span class="week-label">{esc(fmt_tanggal(hari_list[0]))} &ndash; {esc(fmt_tanggal(hari_list[-1]))}</span>
+            <a class="btn btn-ghost" href="{base}&minggu={next_m}">Minggu depan &rarr;</a>
+          </div>
+        </div>
+        <div class="card table-card"><div class="table-scroll">
+        <table class="tabel"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
+        {th_hari}{th_tot}</tr></thead>
+        <tbody>{rows_html}{total_row}</tbody></table></div>
+        <p class="muted"><small>Ketuk sel untuk mengubah status manual (Sakit/Izin/dll).
+        H=Hadir, T=Terlambat, S=Sakit, I=Izin, A=Alpa.</small></p></div>"""
+        return self.send_html(layout(user, "Tabel Siswa", body, flash, aktif="tabel-siswa"))
+
+    def tabel_guru(self, user, qs, flash):
+        conn = db()
+        hari_list = self._parse_minggu(qs)
+        for d in hari_list:
+            pastikan_alpa(conn, d.strftime("%Y-%m-%d"))
+        gurus = conn.execute(
+            "SELECT * FROM users WHERE role='guru' AND aktif=1 ORDER BY nama").fetchall()
+        peta = self._peta_kehadiran(conn, "guru", [g["id"] for g in gurus],
+                                    hari_list[0].strftime("%Y-%m-%d"),
+                                    hari_list[-1].strftime("%Y-%m-%d"))
+        conn.close()
+        hari_ini = waktu_sekarang().date().strftime("%Y-%m-%d")
+        th_hari, th_tot = self._kepala_tabel(hari_list)
+        senin = hari_list[0]
+        prev_m = (senin - timedelta(days=7)).strftime("%Y-%m-%d")
+        next_m = (senin + timedelta(days=7)).strftime("%Y-%m-%d")
+        rows_html = ""
+        per_hari = [dict() for _ in hari_list]
+        for i, g in enumerate(gurus):
+            totals = {st: 0 for st in STATUS_LIST}
+            tds = ""
+            for j, d in enumerate(hari_list):
+                tgl = d.strftime("%Y-%m-%d")
+                rec = peta.get((g["id"], tgl))
+                if rec:
+                    totals[rec["status"]] += 1
+                    per_hari[j][rec["status"]] = per_hari[j].get(rec["status"], 0) + 1
+                tds += self._sel_html(rec, tgl, "guru", g["id"], hari_ini)
+            tot_tds = "".join(f'<td class="tot">{totals[st] or ""}</td>' for st in STATUS_LIST)
+            rows_html += (f'<tr><td class="no">{i + 1}</td>'
+                          f'<td class="nama">{esc(g["nama"])}<br>'
+                          f'<small class="muted">{esc(g["mapel"] or "-")}</small></td>'
+                          f'{tds}{tot_tds}</tr>')
+        rows_html = rows_html or (
+            f'<tr><td colspan="14"><div class="empty-state">{icon("badge")}'
+            f'<p>Belum ada guru aktif.</p>'
+            f'<small>Guru yang ditambahkan admin akan muncul di sini.</small></div></td></tr>')
+        total_row = (f'<tr class="total-row"><td></td><td class="nama">Total per hari</td>'
+                     f'{self._total_bawah(per_hari)}'
+                     + "".join(f'<td class="tot">{sum(per_hari[j].get(st, 0) for j in range(6)) or ""}</td>'
+                               for st in STATUS_LIST) + '</tr>')
+        body = f"""<h2>Tabel Guru</h2>
+        <div class="card toolbar-card">
+          <div class="week-nav">
+            <a class="btn btn-ghost" href="/tabel-guru?minggu={prev_m}">&larr; Minggu lalu</a>
+            <span class="week-label">{esc(fmt_tanggal(hari_list[0]))} &ndash; {esc(fmt_tanggal(hari_list[-1]))}</span>
+            <a class="btn btn-ghost" href="/tabel-guru?minggu={next_m}">Minggu depan &rarr;</a>
+            <a class="btn btn-excel" href="/tabel-guru/excel?minggu={senin.strftime('%Y-%m-%d')}">{icon('download')} Download Excel</a>
+          </div>
+        </div>
+        <div class="card table-card"><div class="table-scroll">
+        <table class="tabel"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
+        {th_hari}{th_tot}</tr></thead>
+        <tbody>{rows_html}{total_row}</tbody></table></div>
+        <p class="muted"><small>Ketuk sel untuk mengubah status manual. Kolom kedua nama berisi mata pelajaran guru.</small></p></div>"""
+        return self.send_html(layout(user, "Tabel Guru", body, flash, aktif="tabel-guru"))
+
+    # -- edit kehadiran manual ---------------------------------------------------
+    def kehadiran_edit(self, user, qs, flash):
+        tanggal = (qs.get("tanggal") or [""])[0]
+        tipe = (qs.get("tipe") or [""])[0]
+        try:
+            ref_id = int((qs.get("id") or ["0"])[0])
+        except ValueError:
+            ref_id = 0
+        conn = db()
+        orang, sub = None, ""
+        if tipe == "siswa":
+            orang = conn.execute(
+                """SELECT s.*, c.nama AS sub FROM students s JOIN classes c ON c.id=s.class_id
+                   WHERE s.id=?""", (ref_id,)).fetchone()
+        elif tipe == "guru":
+            r = conn.execute("SELECT * FROM users WHERE id=? AND role='guru'", (ref_id,)).fetchone()
+            if r:
+                orang, sub = r, (r["mapel"] or "")
+        if not orang:
+            conn.close()
+            return self.redirect("/dashboard", "Data tidak ditemukan.")
+        if tipe == "siswa":
+            sub = orang["sub"]
+        rec = conn.execute(
+            "SELECT * FROM kehadiran WHERE tanggal=? AND ref_type=? AND ref_id=?",
+            (tanggal, tipe, ref_id)).fetchone()
+        conn.close()
+        try:
+            d = datetime.strptime(tanggal, "%Y-%m-%d").date()
+            tgl_label = f"{NAMA_HARI[d.weekday()]}, {fmt_tanggal(d)}"
+        except ValueError:
+            tgl_label = tanggal
+        status_opts = "".join(
+            f'<option{" selected" if rec and rec["status"] == st else ""}>{st}</option>'
+            for st in STATUS_LIST)
+        jam_val = rec["jam"] if rec and rec["jam"] else ""
+        body = f"""<h2>Ubah Kehadiran</h2>
+        <form method="post" action="/kehadiran/edit" class="card form-card">
+          <input type="hidden" name="tipe" value="{esc(tipe)}">
+          <input type="hidden" name="id" value="{ref_id}">
+          <p><b>{esc(orang['nama'])}</b> <span class="muted">{esc(sub)}</span></p>
+          <label>Tanggal <input type="date" name="tanggal" value="{esc(tanggal)}" required></label>
+          <p class="muted"><small>{esc(tgl_label)}</small></p>
+          <label>Status <select name="status">{status_opts}</select></label>
+          <label>Jam masuk (untuk Hadir/Terlambat; boleh kosong)
+            <input type="time" name="jam" value="{esc(jam_val)}"></label>
+          <button type="submit" class="btn btn-primary">Simpan</button></form>
+        <p><a href="/tabel-{'siswa' if tipe == 'siswa' else 'guru'}">Kembali ke tabel</a></p>"""
+        return self.send_html(layout(user, "Ubah Kehadiran", body, flash))
+
+    def post_kehadiran_edit(self, user, f):
+        tipe = f.get("tipe", "")
+        tanggal = (f.get("tanggal") or "").strip()
+        status = f.get("status", "")
+        try:
+            ref_id = int(f.get("id", "0"))
+            datetime.strptime(tanggal, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return self.redirect("/dashboard", "Data tidak valid.")
+        if tipe not in ("siswa", "guru") or status not in STATUS_LIST:
+            return self.redirect("/dashboard", "Data tidak valid.")
+        conn = db()
+        if tipe == "siswa":
+            orang = conn.execute("SELECT * FROM students WHERE id=?", (ref_id,)).fetchone()
+        else:
+            orang = conn.execute("SELECT * FROM users WHERE id=? AND role='guru'",
+                                 (ref_id,)).fetchone()
+        if not orang:
+            conn.close()
+            return self.redirect("/dashboard", "Data tidak ditemukan.")
+        jam = (f.get("jam") or "").strip() or None
+        if status not in ("Hadir", "Terlambat"):
+            jam = None
+        elif not jam and tanggal == waktu_sekarang().strftime("%Y-%m-%d"):
+            jam = waktu_sekarang().strftime("%H:%M")
+        conn.execute(
+            """INSERT INTO kehadiran (tanggal, ref_type, ref_id, status, jam, metode, dicatat_oleh)
+               VALUES (?,?,?,?,?,'manual',?)
+               ON CONFLICT(tanggal, ref_type, ref_id) DO UPDATE SET
+                 status=excluded.status, jam=excluded.jam, metode='manual',
+                 dicatat_oleh=excluded.dicatat_oleh""",
+            (tanggal, tipe, ref_id, status, jam, user["id"]))
+        conn.commit(); conn.close()
+        if tipe == "siswa":
+            return self.redirect(
+                f"/tabel-siswa?kelas={orang['class_id']}&minggu={tanggal}",
+                f"{orang['nama']} ditandai {status} pada {tanggal}.")
+        return self.redirect(f"/tabel-guru?minggu={tanggal}",
+                             f"{orang['nama']} ditandai {status} pada {tanggal}.")
+
+    # -- Excel (openpyxl) ---------------------------------------------------------
+    def _buat_excel(self, judul, subjudul, label_kolom3, baris, hari_list, nama_sekolah=""):
+        """baris: list dict {nama, kolom3, sel: [(status, jam)|None x6], total: {status: n}}"""
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Absensi"
+        tipis = Side(style="thin", color="9AA3B2")
+        border = Border(left=tipis, right=tipis, top=tipis, bottom=tipis)
+        fill_status = {"Hadir": "C6EFCE", "Terlambat": "FFEB9C", "Sakit": "BDD7EE",
+                       "Izin": "E4DFEC", "Alpa": "FFC7CE"}
+        font_status = {"Hadir": "006100", "Terlambat": "9C6500", "Sakit": "1F4E79",
+                       "Izin": "5B4A8A", "Alpa": "9C0006"}
+        nkol = 3 + 6 + 5
+        akhir = get_column_letter(nkol)
+        periode = (f"Minggu: {NAMA_HARI[0]}, {fmt_tanggal(hari_list[0])} – "
+                   f"{NAMA_HARI[5]}, {fmt_tanggal(hari_list[-1])}")
+        off = 1 if nama_sekolah else 0  # baris nama sekolah di paling atas bila diisi
+        if nama_sekolah:
+            ws.merge_cells(f"A1:{akhir}1")
+            c = ws["A1"]; c.value = nama_sekolah
+            c.font = Font(bold=True, size=16, color="1F3864")
+        ws.merge_cells(f"A{1 + off}:{akhir}{1 + off}")
+        c = ws[f"A{1 + off}"]; c.value = judul
+        c.font = Font(bold=True, size=15, color="1F3864")
+        ws.merge_cells(f"A{2 + off}:{akhir}{2 + off}")
+        c = ws[f"A{2 + off}"]; c.value = subjudul
+        c.font = Font(bold=True, size=11, color="404040")
+        ws.merge_cells(f"A{3 + off}:{akhir}{3 + off}")
+        c = ws[f"A{3 + off}"]; c.value = periode
+        c.font = Font(size=11, color="404040")
+        header = ["No", "Nama", label_kolom3]
+        header += [f"{NAMA_HARI[d.weekday()]}\n{d.day} {NAMA_BULAN_SINGKAT[d.month - 1]}"
+                   for d in hari_list]
+        header += ["H", "T", "S", "I", "A"]
+        fill_head = PatternFill("solid", fgColor="203764")
+        font_head = Font(bold=True, color="FFFFFF", size=11)
+        for j, h in enumerate(header, start=1):
+            c = ws.cell(row=4 + off, column=j, value=h)
+            c.fill = fill_head; c.font = font_head
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = border
+        ws.row_dimensions[4 + off].height = 30
+        per_hari = [dict() for _ in hari_list]
+        r = 5 + off
+        for i, b in enumerate(baris):
+            zebra = PatternFill("solid", fgColor="F2F5FA") if i % 2 == 1 else None
+            vals = [i + 1, b["nama"], b["kolom3"]]
+            for j in range(3):
+                c = ws.cell(row=r, column=j + 1, value=vals[j])
+                c.border = border
+                if zebra: c.fill = zebra
+                c.alignment = Alignment(horizontal="center" if j != 1 else "left",
+                                        vertical="center")
+            for j, sel in enumerate(b["sel"]):
+                c = ws.cell(row=r, column=4 + j)
+                c.border = border
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                if sel:
+                    status, jam = sel
+                    c.value = f"{status}\n{fmt_jam_titik(jam)}" if jam else status
+                    c.fill = PatternFill("solid", fgColor=fill_status[status])
+                    c.font = Font(color=font_status[status], size=10)
+                    per_hari[j][status] = per_hari[j].get(status, 0) + 1
+                elif zebra:
+                    c.fill = zebra
+            for j, st in enumerate(STATUS_LIST):
+                c = ws.cell(row=r, column=10 + j, value=b["total"].get(st, 0) or None)
+                c.border = border
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                if zebra: c.fill = zebra
+            r += 1
+        # baris total bawah
+        c = ws.cell(row=r, column=2, value="TOTAL")
+        c.font = Font(bold=True); c.border = border
+        ws.cell(row=r, column=1).border = border
+        ws.cell(row=r, column=3).border = border
+        for j in range(6):
+            c = ws.cell(row=r, column=4 + j)
+            bagian = [f"{st[0]}: {per_hari[j][st]}" for st in STATUS_LIST if per_hari[j].get(st)]
+            c.value = "\n".join(bagian) if bagian else None
+            c.font = Font(bold=True, size=9)
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = border
+        for j, st in enumerate(STATUS_LIST):
+            c = ws.cell(row=r, column=10 + j,
+                        value=sum(per_hari[d].get(st, 0) for d in range(6)) or None)
+            c.font = Font(bold=True)
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.border = border
+        lebar = {1: 5, 2: 34, 3: 16}
+        for j in range(4, 10):
+            lebar[j] = 13
+        for j in range(10, 15):
+            lebar[j] = 5
+        for j, w in lebar.items():
+            ws.column_dimensions[get_column_letter(j)].width = w
+        ws.freeze_panes = f"A{5 + off}"
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def _nama_file_excel(self, awalan, label, hari_list):
+        bersih = re.sub(r"[^\w.\-]+", "_", label).strip("_") or "data"
+        a, b = hari_list[0], hari_list[-1]
+        return (f"{awalan}_{bersih}_{a.day}-{b.day}"
+                f"{NAMA_BULAN_SINGKAT[b.month - 1]}{b.year}.xlsx")
+
+    def excel_siswa(self, user, qs):
+        conn = db()
+        classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
+        if not classes:
+            conn.close()
+            return self.redirect("/tabel-siswa", "Belum ada kelas.")
+        try:
+            kid = int((qs.get("kelas") or [""])[0])
+        except (ValueError, TypeError):
+            kid = classes[0]["id"]
+        kelas = next((c for c in classes if c["id"] == kid), classes[0])
+        hari_list = self._parse_minggu(qs)
+        for d in hari_list:
+            pastikan_alpa(conn, d.strftime("%Y-%m-%d"))
+        students = conn.execute("SELECT * FROM students WHERE class_id=? ORDER BY nama",
+                                (kelas["id"],)).fetchall()
+        peta = self._peta_kehadiran(conn, "siswa", [s["id"] for s in students],
+                                    hari_list[0].strftime("%Y-%m-%d"),
+                                    hari_list[-1].strftime("%Y-%m-%d"))
+        conn.close()
+        baris = []
+        for s in students:
+            sel, total = [], {st: 0 for st in STATUS_LIST}
+            for d in hari_list:
+                rec = peta.get((s["id"], d.strftime("%Y-%m-%d")))
+                if rec:
+                    sel.append((rec["status"], rec["jam"]))
+                    total[rec["status"]] += 1
+                else:
+                    sel.append(None)
+            baris.append({"nama": s["nama"], "kolom3": s["kode"], "sel": sel, "total": total})
+        data = self._buat_excel("ABSENSI SISWA", f"Kelas: {kelas['nama']}", "NIS",
+                                baris, hari_list,
+                                nama_sekolah=get_pengaturan()["nama_sekolah"])
+        nama_file = self._nama_file_excel("Absensi", kelas["nama"], hari_list)
+        return self.send_bytes(
+            data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=nama_file)
+
+    def excel_guru(self, user, qs):
+        conn = db()
+        hari_list = self._parse_minggu(qs)
+        for d in hari_list:
+            pastikan_alpa(conn, d.strftime("%Y-%m-%d"))
+        gurus = conn.execute(
+            "SELECT * FROM users WHERE role='guru' AND aktif=1 ORDER BY nama").fetchall()
+        peta = self._peta_kehadiran(conn, "guru", [g["id"] for g in gurus],
+                                    hari_list[0].strftime("%Y-%m-%d"),
+                                    hari_list[-1].strftime("%Y-%m-%d"))
+        conn.close()
+        baris = []
+        for g in gurus:
+            sel, total = [], {st: 0 for st in STATUS_LIST}
+            for d in hari_list:
+                rec = peta.get((g["id"], d.strftime("%Y-%m-%d")))
+                if rec:
+                    sel.append((rec["status"], rec["jam"]))
+                    total[rec["status"]] += 1
+                else:
+                    sel.append(None)
+            baris.append({"nama": g["nama"], "kolom3": g["mapel"] or "",
+                          "sel": sel, "total": total})
+        data = self._buat_excel("ABSENSI GURU", "Semua Guru", "Mapel", baris, hari_list,
+                                nama_sekolah=get_pengaturan()["nama_sekolah"])
+        nama_file = self._nama_file_excel("Absensi_Guru", "Semua_Guru", hari_list)
+        return self.send_bytes(
+            data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=nama_file)
+
+    # -- menu (mobile) ---------------------------------------------------------
+    def menu_page(self, user, flash):
+        items = nav_items(user)
+        cards = "".join(
+            f'<a class="menu-card" href="{href}">{icon(ic)}<span>{label}</span></a>'
+            for k, href, label, ic in items)
+        cards += (f'<a class="menu-card danger" href="/logout">{icon("logout")}'
+                  f'<span>Keluar</span></a>')
+        role_label = "Admin" if user["role"] == "admin" else "Guru"
+        body = f"""<h2>Menu</h2>
+        <div class="card user-card"><span class="avatar lg">{esc((user['nama'] or '?')[:1].upper())}</span>
+        <span><b>{esc(user['nama'])}</b><br><small class="muted">{role_label} &bull; @{esc(user['username'])}</small></span></div>
+        <div class="menu-grid">{cards}</div>"""
+        return self.send_html(layout(user, "Menu", body, flash, aktif="menu"))
 
     # -- cetak kartu QR ---------------------------------------------------------
-    def cetak(self, user, class_id, flash):
+    def cetak_index(self, user, flash):
+        conn = db()
+        classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
+        conn.close()
+        links = "".join(
+            f'<a class="menu-card" href="/cetak/kelas/{c["id"]}">{icon("users")}'
+            f'<span>Kartu Siswa &mdash; {esc(c["nama"])}</span></a>' for c in classes)
+        links = links or '<p class="muted">Belum ada kelas.</p>'
+        body = f"""<h2>Cetak Kartu QR</h2>
+        <h3>Kartu Siswa per Kelas</h3><div class="menu-grid">{links}</div>
+        <h3>Kartu Guru</h3><div class="menu-grid">
+        <a class="menu-card" href="/cetak/guru">{icon('badge')}<span>Kartu Semua Guru</span></a></div>
+        <p class="muted"><small>Kartu berisi QR Code biasa (bukan QRIS pembayaran),
+        di-scan di gerbang sekolah.</small></p>"""
+        return self.send_html(layout(user, "Cetak Kartu", body, flash, aktif="cetak"))
+
+    def cetak_kelas(self, user, class_id, flash):
         conn = db()
         kelas = conn.execute("SELECT * FROM classes WHERE id=?", (class_id,)).fetchone()
         if not kelas:
@@ -1095,12 +1267,28 @@ class Handler(BaseHTTPRequestHandler):
             f"""<div class="kartu"><div class="knama">{esc(st['nama'])}</div>
                 <div class="kkelas">{esc(kelas['nama'])}</div>
                 <img src="/qr/{urllib.parse.quote(st['kode'])}.png" alt="QR {esc(st['kode'])}">
-                <div class="kkode">{esc(st['kode'])}</div></div>""" for st in students)
-        body = f"""<h2 class="noprint">Cetak Kartu QR - {esc(kelas['nama'])}</h2>
-        <p class="noprint"><button onclick="window.print()">Cetak Halaman Ini</button>
-        &nbsp;Kartu berisi QR Code biasa dari kode unik siswa (bukan QRIS). Gunting tiap kartu untuk dibagikan.</p>
+                <div class="kkode">NIS {esc(st['kode'])}</div></div>""" for st in students)
+        body = f"""<h2 class="noprint">Cetak Kartu QR Siswa - {esc(kelas['nama'])}</h2>
+        <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
+        &nbsp;Kartu berisi QR Code biasa dari NIS siswa (bukan QRIS). Gunting tiap kartu untuk dibagikan.</p>
         <div class="lembar">{cards or '<p>Belum ada siswa di kelas ini.</p>'}</div>"""
-        return self.send_html(layout(user, "Cetak Kartu QR", body, flash))
+        return self.send_html(layout(user, "Cetak Kartu QR Siswa", body, flash, aktif="cetak"))
+
+    def cetak_guru(self, user, flash):
+        conn = db()
+        gurus = conn.execute(
+            "SELECT * FROM users WHERE role='guru' AND aktif=1 ORDER BY nama").fetchall()
+        conn.close()
+        cards = "".join(
+            f"""<div class="kartu"><div class="knama">{esc(g['nama'])}</div>
+                <div class="kkelas">{esc(g['mapel'] or 'Guru')}</div>
+                <img src="/qr/{urllib.parse.quote(g['kode_qr'] or '')}.png" alt="QR {esc(g['kode_qr'] or '')}">
+                <div class="kkode">{esc(g['kode_qr'] or '')}</div></div>""" for g in gurus)
+        body = f"""<h2 class="noprint">Cetak Kartu QR Guru</h2>
+        <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
+        &nbsp;Kartu berisi QR Code biasa dari kode guru (bukan QRIS). Gunting tiap kartu untuk dibagikan.</p>
+        <div class="lembar">{cards or '<p>Belum ada guru aktif.</p>'}</div>"""
+        return self.send_html(layout(user, "Cetak Kartu QR Guru", body, flash, aktif="cetak"))
 
     def qr_png(self, raw_code):
         code = urllib.parse.unquote(raw_code)
@@ -1115,17 +1303,574 @@ class Handler(BaseHTTPRequestHandler):
             data = buf.getvalue()
         except Exception as e:
             return self.send_html(f"Gagal membuat QR: {esc(e)}", status=500)
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        return self.send_bytes(data, "image/png")
+
+
+# ---------------------------------------------------------------------------
+# Pengaturan tampilan (tabel settings key-value)
+# ---------------------------------------------------------------------------
+BG_PRESETS = ["#f3f5fb", "#ffffff", "#e6f4ea", "#fdeee3",
+              "#ece7f7", "#e0f2fe", "#fef3c7", "#334155"]
+BG_DEFAULT = "#f3f5fb"
+UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
+WALLPAPER_EXT = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                 ".png": "image/png", ".webp": "image/webp"}
+WALLPAPER_NAMA_RE = re.compile(r"^[0-9a-f]{24}\.(jpg|jpeg|png|webp)$")
+
+
+def get_pengaturan():
+    """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
+    peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": ""}
+    try:
+        conn = db()
+        for r in conn.execute("SELECT key, value FROM settings").fetchall():
+            if r["key"] in peng and r["value"]:
+                peng[r["key"]] = r["value"]
+        conn.close()
+    except Exception:
+        pass
+    if not re.match(r"^#[0-9a-fA-F]{6}$", peng["bg_color"] or ""):
+        peng["bg_color"] = BG_DEFAULT
+    if peng["wallpaper"] and not WALLPAPER_NAMA_RE.match(peng["wallpaper"]):
+        peng["wallpaper"] = ""
+    return peng
+
+
+def set_pengaturan(conn, key, value):
+    conn.execute(
+        """INSERT INTO settings (key, value) VALUES (?,?)
+           ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (key, value))
+
+
+def parse_multipart(body, content_type):
+    """Parser multipart/form-data sederhana -> (fields, files).
+
+    files: {nama_field: (filename, bytes)}. Cukup untuk form unggah satu
+    berkas di aplikasi ini.
+    """
+    fields, files = {}, {}
+    m = re.search(r"boundary=(.+)$", content_type or "")
+    if not m:
+        return fields, files
+    boundary = m.group(1).strip().strip('"').encode()
+    for part in body.split(b"--" + boundary):
+        part = part.strip(b"\r\n")
+        if not part or part == b"--":
+            continue
+        if part.endswith(b"--"):
+            part = part[:-2].rstrip(b"\r\n")
+        head, sep, data = part.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        head_txt = head.decode("utf-8", "replace")
+        name_m = re.search(r'name="([^"]+)"', head_txt)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+        file_m = re.search(r'filename="([^"]*)"', head_txt)
+        if file_m:
+            files[name] = (file_m.group(1), data)
+        else:
+            fields[name] = data.decode("utf-8", "replace")
+    return fields, files
+
+
+# ---------------------------------------------------------------------------
+# Handler tambahan: admin CRUD + tampilan + wallpaper (ditempel ke Handler)
+# ---------------------------------------------------------------------------
+def _admin_guru(self, user, flash):
+    conn = db()
+    rows = conn.execute(
+        """SELECT u.*,
+                  (SELECT COUNT(*) FROM kehadiran k WHERE k.ref_type='guru' AND k.ref_id=u.id)
+                + (SELECT COUNT(*) FROM kehadiran k WHERE k.dicatat_oleh=u.id) AS jml_riwayat
+           FROM users u WHERE u.role='guru' ORDER BY u.nama""").fetchall()
+    conn.close()
+    items = ""
+    for r in rows:
+        nama_js = js_str(r["nama"])
+        dasar = (f'<li><b>{esc(r["nama"])}</b> &mdash; {esc(r["mapel"] or "-")} '
+                 f'&mdash; username: <code>{esc(r["username"])}</code> '
+                 f'&mdash; kode QR: <code>{esc(r["kode_qr"] or "-")}</code> '
+                 f'&mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
+        if not r["aktif"]:
+            items += (dasar + '(nonaktif) '
+                      f'<form method="post" action="/admin/guru/{r["id"]}/aktifkan" class="inline">'
+                      f'<button type="submit" class="btn btn-ghost btn-sm">Aktifkan</button></form></li>')
+        elif r["jml_riwayat"]:
+            confirm_msg = (f"Nonaktifkan guru {nama_js}? Guru ini sudah punya riwayat kehadiran, "
+                           f"jadi akunnya akan dinonaktifkan (bukan dihapus) dan riwayat "
+                           f"kehadirannya tetap tersimpan.")
+            items += (dasar +
+                      f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
+                      f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+        else:
+            confirm_msg = f"Hapus guru {nama_js}? Akun guru ini akan dihapus permanen."
+            items += (dasar +
+                      f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
+                      f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+    items = items or '<li class="muted">Belum ada guru.</li>'
+    body = f"""<h2>Kelola Guru</h2>
+    <div class="card"><ul class="plain-list">{items}</ul></div>
+    <div class="card form-card"><h3>Tambah Guru</h3>
+    <form method="post" action="/admin/guru">
+      <label>Nama <input name="nama" required></label>
+      <label>Mata Pelajaran <input name="mapel" required placeholder="mis. Matematika"></label>
+      <label>Username <input name="username" required></label>
+      <label>Password awal <input name="password" type="password" required minlength="8"></label>
+      <button type="submit" class="btn btn-primary">Tambah Guru</button></form></div>"""
+    return self.send_html(layout(user, "Guru", body, flash, aktif="guru"))
+
+
+def _post_admin_guru(self, f):
+    try:
+        ph, salt = hash_password(f["password"])
+        conn = db()
+        cur = conn.execute(
+            "INSERT INTO users (username,password_hash,salt,role,nama,mapel) VALUES (?,?,?,'guru',?,?)",
+            (f["username"].strip(), ph, salt, f["nama"].strip(), f.get("mapel", "").strip()))
+        gid = cur.lastrowid
+        conn.execute("UPDATE users SET kode_qr=? WHERE id=?",
+                     (kode_qr_guru_baru(conn, gid), gid))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/guru", "Guru ditambahkan.")
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect("/admin/guru", "Username sudah dipakai.")
+
+
+def _get_guru(self, conn, gid):
+    return conn.execute("SELECT * FROM users WHERE id=? AND role='guru'", (gid,)).fetchone()
+
+
+def _admin_guru_edit(self, user, gid, flash):
+    conn = db()
+    g = self._get_guru(conn, gid)
+    conn.close()
+    if not g:
+        return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+    body = f"""<h2>Edit Guru</h2>
+    <form method="post" action="/admin/guru/{g['id']}/edit" class="card form-card">
+      <label>Nama <input name="nama" value="{esc(g['nama'])}" required></label>
+      <label>Mata Pelajaran <input name="mapel" value="{esc(g['mapel'] or '')}" required></label>
+      <label>Username <input name="username" value="{esc(g['username'])}" required></label>
+      <label>Kode QR guru <input value="{esc(g['kode_qr'] or '')}" readonly disabled></label>
+      <label>Password baru (kosongkan jika tidak diganti)
+        <input name="password" type="password" minlength="8"></label>
+      <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
+    <p><a href="/admin/guru">Kembali ke daftar guru</a></p>"""
+    return self.send_html(layout(user, "Edit Guru", body, flash, aktif="guru"))
+
+
+def _post_admin_guru_edit(self, gid, f):
+    conn = db()
+    g = self._get_guru(conn, gid)
+    if not g:
+        conn.close()
+        return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+    try:
+        pw = f.get("password", "")
+        if pw:
+            ph, salt = hash_password(pw)
+            conn.execute(
+                "UPDATE users SET nama=?, username=?, mapel=?, password_hash=?, salt=? WHERE id=?",
+                (f["nama"].strip(), f["username"].strip(), f.get("mapel", "").strip(), ph, salt, gid))
+        else:
+            conn.execute(
+                "UPDATE users SET nama=?, username=?, mapel=? WHERE id=?",
+                (f["nama"].strip(), f["username"].strip(), f.get("mapel", "").strip(), gid))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/guru", "Guru diperbarui.")
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect(f"/admin/guru/{gid}/edit", "Username sudah dipakai.")
+
+
+def _post_admin_guru_hapus(self, gid):
+    conn = db()
+    g = self._get_guru(conn, gid)
+    if not g:
+        conn.close()
+        return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+    jml = conn.execute(
+        """SELECT COUNT(*) c FROM kehadiran
+           WHERE (ref_type='guru' AND ref_id=?) OR dicatat_oleh=?""", (gid, gid)).fetchone()["c"]
+    if jml:
+        # Sudah punya riwayat kehadiran: jangan hapus, cukup nonaktifkan.
+        conn.execute("UPDATE users SET aktif=0 WHERE id=?", (gid,))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/guru",
+                             "Guru dinonaktifkan karena sudah punya riwayat kehadiran. "
+                             "Riwayat kehadirannya tetap tersimpan.")
+    conn.execute("DELETE FROM users WHERE id=?", (gid,))
+    conn.commit(); conn.close()
+    return self.redirect("/admin/guru", "Guru dihapus.")
+
+
+def _post_admin_guru_aktifkan(self, gid):
+    conn = db()
+    g = self._get_guru(conn, gid)
+    if not g:
+        conn.close()
+        return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+    conn.execute("UPDATE users SET aktif=1 WHERE id=?", (gid,))
+    conn.commit(); conn.close()
+    return self.redirect("/admin/guru", "Guru diaktifkan kembali.")
+
+
+# -- admin: kelas (pola daftar sederhana) ------------------------------------
+def _simple_list(self, user, flash, table, title, action, label, aktif_key):
+    conn = db()
+    rows = conn.execute(f"SELECT * FROM {table} ORDER BY nama").fetchall()
+    conn.close()
+    items = ""
+    for r in rows:
+        confirm_msg = f"Hapus {label.lower()} {js_str(r['nama'])}?"
+        items += (
+            f'<li><b>{esc(r["nama"])}</b> '
+            f'&mdash; <a href="{action}/{r["id"]}/edit">Edit</a> '
+            f'<form method="post" action="{action}/{r["id"]}/hapus" class="inline" '
+            f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+    items = items or '<li class="muted">Belum ada data.</li>'
+    body = f"""<h2>{esc(title)}</h2>
+    <div class="card"><ul class="plain-list">{items}</ul></div>
+    <div class="card form-card"><h3>Tambah {esc(label)}</h3>
+    <form method="post" action="{action}">
+      <label>Nama baru <input name="nama" required></label>
+      <button type="submit" class="btn btn-primary">Tambah</button></form></div>"""
+    return self.send_html(layout(user, title, body, flash, aktif=aktif_key))
+
+
+def _admin_kelas(self, user, flash):
+    return self._simple_list(user, flash, "classes", "Kelola Kelas",
+                             "/admin/kelas", "Kelas", "kelas")
+
+
+def _post_simple(self, table, f, back):
+    try:
+        conn = db()
+        conn.execute(f"INSERT INTO {table} (nama) VALUES (?)", (f["nama"].strip(),))
+        conn.commit(); conn.close()
+        return self.redirect(back, "Data ditambahkan.")
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect(back, "Nama sudah ada.")
+
+
+def _post_admin_kelas(self, f):
+    return self._post_simple("classes", f, "/admin/kelas")
+
+
+def _simple_edit(self, user, table, action, label, item_id, flash, aktif_key):
+    conn = db()
+    row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (item_id,)).fetchone()
+    conn.close()
+    if not row:
+        return self.redirect(action, "Data tidak ditemukan.")
+    body = f"""<h2>Edit {esc(label)}</h2>
+    <form method="post" action="{action}/{row['id']}/edit" class="card form-card">
+      <label>Nama <input name="nama" value="{esc(row['nama'])}" required></label>
+      <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
+    <p><a href="{action}">Kembali ke daftar {esc(label.lower())}</a></p>"""
+    return self.send_html(layout(user, f"Edit {label}", body, flash, aktif=aktif_key))
+
+
+def _admin_kelas_edit(self, user, kid, flash):
+    return self._simple_edit(user, "classes", "/admin/kelas", "Kelas", kid, flash, "kelas")
+
+
+def _post_simple_edit(self, table, action, label, item_id, f):
+    conn = db()
+    row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        return self.redirect(action, "Data tidak ditemukan.")
+    try:
+        conn.execute(f"UPDATE {table} SET nama=? WHERE id=?",
+                     (f["nama"].strip(), item_id))
+        conn.commit(); conn.close()
+        return self.redirect(action, f"{label} diperbarui.")
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect(f"{action}/{item_id}/edit", "Nama sudah ada.")
+
+
+def _post_admin_kelas_edit(self, kid, f):
+    return self._post_simple_edit("classes", "/admin/kelas", "Kelas", kid, f)
+
+
+def _post_admin_kelas_hapus(self, kid):
+    conn = db()
+    row = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
+    if not row:
+        conn.close()
+        return self.redirect("/admin/kelas", "Data tidak ditemukan.")
+    # Hapus aman: kelas yang masih punya siswa tidak boleh dihapus, agar
+    # data siswa & riwayat kehadirannya tidak rusak.
+    jml = conn.execute("SELECT COUNT(*) c FROM students WHERE class_id=?",
+                       (kid,)).fetchone()["c"]
+    if jml:
+        conn.close()
+        return self.redirect(
+            "/admin/kelas",
+            "Kelas tidak bisa dihapus karena masih dipakai (ada siswa). "
+            "Hapus atau pindahkan dulu siswa di kelas ini.")
+    try:
+        conn.execute("DELETE FROM classes WHERE id=?", (kid,))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect(
+            "/admin/kelas",
+            "Kelas tidak bisa dihapus karena masih dipakai data lain.")
+    conn.close()
+    return self.redirect("/admin/kelas", "Kelas dihapus.")
+
+
+# -- admin: siswa --------------------------------------------------------------
+def _admin_siswa(self, user, qs, flash):
+    conn = db()
+    classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
+    class_opts = "".join(f'<option value="{c["id"]}">{esc(c["nama"])}</option>' for c in classes)
+    rows = conn.execute(
+        """SELECT s.*, c.nama kelas FROM students s JOIN classes c ON c.id=s.class_id
+           ORDER BY c.nama, s.nama""").fetchall()
+    conn.close()
+    items = ""
+    for r in rows:
+        confirm_msg = f"Hapus siswa {js_str(r['nama'])}? Catatan kehadirannya juga akan terhapus."
+        items += (
+            f'<li><b>{esc(r["nama"])}</b> &mdash; NIS: <code>{esc(r["kode"])}</code> '
+            f'&mdash; {esc(r["kelas"])} '
+            f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
+            f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
+            f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+    items = items or '<li class="muted">Belum ada siswa.</li>'
+    body = f"""<h2>Kelola Siswa</h2>
+    <div class="card"><ul class="plain-list">{items}</ul></div>
+    <div class="card form-card"><h3>Tambah Siswa</h3>
+    <form method="post" action="/admin/siswa">
+      <label>Nama <input name="nama" required></label>
+      <label>NIS <input name="kode" required></label>
+      <label>Kelas <select name="class_id">{class_opts}</select></label>
+      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>"""
+    return self.send_html(layout(user, "Siswa", body, flash, aktif="siswa"))
+
+
+def _post_admin_siswa(self, f):
+    try:
+        conn = db()
+        conn.execute("INSERT INTO students (nama,kode,class_id) VALUES (?,?,?)",
+                     (f["nama"].strip(), f["kode"].strip(), int(f["class_id"])))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/siswa", "Siswa ditambahkan.")
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect("/admin/siswa", "NIS sudah dipakai.")
+
+
+def _admin_siswa_edit(self, user, sid, flash):
+    conn = db()
+    st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
+    if not st:
+        conn.close()
+        return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
+    classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
+    conn.close()
+    class_opts = "".join(
+        f'<option value="{c["id"]}"{" selected" if c["id"] == st["class_id"] else ""}>'
+        f'{esc(c["nama"])}</option>' for c in classes)
+    body = f"""<h2>Edit Siswa</h2>
+    <form method="post" action="/admin/siswa/{st['id']}/edit" class="card form-card">
+      <label>Nama <input name="nama" value="{esc(st['nama'])}" required></label>
+      <label>NIS <input name="kode" value="{esc(st['kode'])}" required></label>
+      <label>Kelas <select name="class_id">{class_opts}</select></label>
+      <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
+    <p><a href="/admin/siswa">Kembali ke daftar siswa</a></p>"""
+    return self.send_html(layout(user, "Edit Siswa", body, flash, aktif="siswa"))
+
+
+def _post_admin_siswa_edit(self, sid, f):
+    conn = db()
+    st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
+    if not st:
+        conn.close()
+        return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
+    try:
+        conn.execute("UPDATE students SET nama=?, kode=?, class_id=? WHERE id=?",
+                     (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]), sid))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/siswa", "Siswa diperbarui.")
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect(f"/admin/siswa/{sid}/edit", "NIS sudah dipakai.")
+
+
+def _post_admin_siswa_hapus(self, sid):
+    conn = db()
+    st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
+    if not st:
+        conn.close()
+        return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
+    # Satu transaksi: hapus catatan kehadiran siswa dulu, baru siswanya.
+    conn.execute("DELETE FROM kehadiran WHERE ref_type='siswa' AND ref_id=?", (sid,))
+    conn.execute("DELETE FROM students WHERE id=?", (sid,))
+    conn.commit(); conn.close()
+    return self.redirect("/admin/siswa", "Siswa dihapus.")
+
+
+# -- admin: pengaturan tampilan --------------------------------------------------
+def _admin_tampilan(self, user, flash):
+    peng = get_pengaturan()
+    swatches = ""
+    for warna in BG_PRESETS:
+        cek = " checked" if peng["bg_color"].lower() == warna.lower() else ""
+        swatches += (f'<label class="swatch" title="{warna}">'
+                     f'<input type="radio" name="bg_color" value="{warna}"{cek}>'
+                     f'<span style="background:{warna}"></span></label>')
+    cek_kustom = "" if peng["bg_color"].lower() in [w.lower() for w in BG_PRESETS] else " checked"
+    wp_html = ""
+    if peng["wallpaper"]:
+        wp_html = f"""<div class="wp-preview"><img src="/wallpaper/{esc(peng['wallpaper'])}"
+          alt="Wallpaper saat ini"></div>
+        <form method="post" action="/admin/tampilan/wallpaper/hapus" class="inline"
+          onsubmit="return confirm('Hapus wallpaper? Latar kembali hanya warna saja.')">
+          <button type="submit" class="btn btn-danger">Hapus Wallpaper</button></form>"""
+    body = f"""<h2>Pengaturan Tampilan</h2>
+    <div class="card form-card"><h3>Nama Sekolah &amp; Warna Latar</h3>
+    <form method="post" action="/admin/tampilan">
+      <label>Nama sekolah (tampil di menu &amp; judul Excel)
+        <input name="nama_sekolah" value="{esc(peng['nama_sekolah'])}"
+               placeholder="mis. SMA Negeri 1 Contoh"></label>
+      <label>Warna latar aplikasi</label>
+      <div class="swatches">{swatches}
+        <label class="swatch kustom" title="Warna kustom">
+          <input type="radio" name="bg_color" value="kustom"{cek_kustom}>
+          <input type="color" name="bg_color_custom" value="{esc(peng['bg_color'])}">
+        </label>
+      </div>
+      <p class="muted"><small>Pilih warna contoh, atau pilih radio terakhir lalu
+      tentukan warna kustom dengan pemilih warna.</small></p>
+      <button type="submit" class="btn btn-primary">Simpan Pengaturan</button></form></div>
+    <div class="card form-card"><h3>Wallpaper Sekolah</h3>
+    <p class="muted">Gambar menjadi latar seluruh aplikasi (termasuk halaman login),
+    di balik lapisan terang agar teks tetap terbaca. Format JPG/PNG/WebP, maks &plusmn;5 MB.
+    Kosongkan untuk latar warna saja.</p>
+    {wp_html}
+    <form method="post" action="/admin/tampilan/wallpaper" enctype="multipart/form-data">
+      <label>Unggah / ganti wallpaper <input type="file" name="wallpaper"
+        accept=".jpg,.jpeg,.png,.webp" required></label>
+      <button type="submit" class="btn btn-primary">Unggah Wallpaper</button></form></div>"""
+    return self.send_html(layout(user, "Pengaturan Tampilan", body, flash, aktif="tampilan"))
+
+
+def _post_admin_tampilan(self, f):
+    warna = (f.get("bg_color") or "").strip()
+    if warna == "kustom":
+        warna = (f.get("bg_color_custom") or "").strip()
+    if not re.match(r"^#[0-9a-fA-F]{6}$", warna):
+        warna = BG_DEFAULT
+    conn = db()
+    set_pengaturan(conn, "bg_color", warna.lower())
+    set_pengaturan(conn, "nama_sekolah", (f.get("nama_sekolah") or "").strip())
+    conn.commit(); conn.close()
+    return self.redirect("/admin/tampilan", "Pengaturan tampilan disimpan.")
+
+
+def _post_admin_tampilan_wallpaper(self):
+    length = int(self.headers.get("Content-Length", "0") or "0")
+    if length > 6 * 1024 * 1024:
+        return self.redirect("/admin/tampilan", "Berkas terlalu besar (maks \u00b15 MB).")
+    body = self.rfile.read(length) if length else b""
+    _fields, files = parse_multipart(body, self.headers.get("Content-Type", ""))
+    berkas = files.get("wallpaper")
+    if not berkas or not berkas[0]:
+        return self.redirect("/admin/tampilan", "Pilih berkas gambar dulu.")
+    filename, data = berkas
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in WALLPAPER_EXT:
+        return self.redirect("/admin/tampilan",
+                             "Format tidak didukung. Pakai JPG, PNG, atau WebP.")
+    if len(data) > 5 * 1024 * 1024:
+        return self.redirect("/admin/tampilan", "Berkas terlalu besar (maks \u00b15 MB).")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    lama = get_pengaturan()["wallpaper"]
+    nama_baru = secrets.token_hex(12) + ext
+    with open(os.path.join(UPLOAD_DIR, nama_baru), "wb") as fh:
+        fh.write(data)
+    conn = db()
+    set_pengaturan(conn, "wallpaper", nama_baru)
+    conn.commit(); conn.close()
+    if lama and lama != nama_baru:
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, lama))
+        except OSError:
+            pass
+    return self.redirect("/admin/tampilan", "Wallpaper dipasang.")
+
+
+def _post_admin_tampilan_wallpaper_hapus(self):
+    lama = get_pengaturan()["wallpaper"]
+    conn = db()
+    set_pengaturan(conn, "wallpaper", "")
+    conn.commit(); conn.close()
+    if lama:
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, lama))
+        except OSError:
+            pass
+    return self.redirect("/admin/tampilan", "Wallpaper dihapus. Latar kembali ke warna saja.")
+
+
+def _wallpaper_file(self, nama):
+    if not WALLPAPER_NAMA_RE.match(nama or ""):
+        return self.send_html("Tidak ditemukan.", status=404)
+    path = os.path.join(UPLOAD_DIR, nama)
+    if not os.path.isfile(path):
+        return self.send_html("Tidak ditemukan.", status=404)
+    ext = os.path.splitext(nama)[1].lower()
+    with open(path, "rb") as fh:
+        data = fh.read()
+    return self.send_bytes(data, WALLPAPER_EXT.get(ext, "application/octet-stream"))
+
+
+# Tempelkan handler-handler di atas sebagai method Handler.
+Handler.admin_guru = _admin_guru
+Handler.post_admin_guru = _post_admin_guru
+Handler._get_guru = _get_guru
+Handler.admin_guru_edit = _admin_guru_edit
+Handler.post_admin_guru_edit = _post_admin_guru_edit
+Handler.post_admin_guru_hapus = _post_admin_guru_hapus
+Handler.post_admin_guru_aktifkan = _post_admin_guru_aktifkan
+Handler._simple_list = _simple_list
+Handler.admin_kelas = _admin_kelas
+Handler._post_simple = _post_simple
+Handler.post_admin_kelas = _post_admin_kelas
+Handler._simple_edit = _simple_edit
+Handler.admin_kelas_edit = _admin_kelas_edit
+Handler._post_simple_edit = _post_simple_edit
+Handler.post_admin_kelas_edit = _post_admin_kelas_edit
+Handler.post_admin_kelas_hapus = _post_admin_kelas_hapus
+Handler.admin_siswa = _admin_siswa
+Handler.post_admin_siswa = _post_admin_siswa
+Handler.admin_siswa_edit = _admin_siswa_edit
+Handler.post_admin_siswa_edit = _post_admin_siswa_edit
+Handler.post_admin_siswa_hapus = _post_admin_siswa_hapus
+Handler.admin_tampilan = _admin_tampilan
+Handler.post_admin_tampilan = _post_admin_tampilan
+Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
+Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
+Handler.wallpaper_file = _wallpaper_file
 
 
 def main():
     init_db()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Aplikasi Absen Siswa Multi-Guru jalan di http://127.0.0.1:{PORT}  (DB: {DB_PATH})")
+    print(f"Aplikasi Absen Siswa (Gerbang Global) jalan di http://127.0.0.1:{PORT}  (DB: {DB_PATH})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
