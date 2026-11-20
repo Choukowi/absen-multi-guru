@@ -1,0 +1,20 @@
+# Blueprint Render untuk aplikasi Absen Siswa Multi-Guru.
+# Versi ini dikonfigurasi untuk paket GRATIS (uji coba):
+# - plan: free  -> aplikasi TIDUR setelah 15 menit tidak diakses
+#                 dan TIDAK ada disk persisten: semua data di
+#                 data/absen.db TERHAPUS setiap aplikasi tidur,
+#                 restart, atau deploy ulang. Hanya untuk tes!
+# Untuk pemakaian resmi sekolah, ubah menjadi berbayar seperti
+# panduan di README.md (plan: starter + disk persisten + ABSEN_DB).
+services:
+  - type: web
+    name: absen-siswa
+    env: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 app.py
+    healthCheckPath: /login
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3

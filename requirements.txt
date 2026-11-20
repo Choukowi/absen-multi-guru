@@ -1,0 +1,4 @@
+# Backend memakai Python 3 standard library saja.
+# Dua paket ini hanya untuk membuat gambar QR Code kartu siswa (server-side).
+qrcode==8.2
+Pillow==10.2.0
