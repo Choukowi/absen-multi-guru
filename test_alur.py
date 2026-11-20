@@ -542,6 +542,36 @@ except urllib.error.HTTPError as e:
 s, url, dash = req(admin, "/dashboard")
 must("/wallpaper/" not in dash, "setelah dihapus latar kembali warna saja")
 
+# --- Logo sekolah: unggah -> brand memakai logo; hapus -> ikon bawaan ---
+try:
+    unggah(guru, "/admin/tampilan/logo", "logo", "logo.png", PNG_1PX)
+    must(False, "guru mengunggah logo harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "guru mengunggah logo -> 404")
+s, url, hasil = unggah(admin, "/admin/tampilan/logo", "logo", "logo.png", PNG_1PX)
+must("Logo dipasang." in hasil, "unggah logo PNG berhasil")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+m_logo = re.search(r"/logo/([0-9a-f]{24}\.png)", hal_tampilan)
+must(m_logo is not None, "halaman tampilan menampilkan logo tersimpan")
+nama_logo = m_logo.group(1)
+st, hdr, data = req_bytes(anon, f"/logo/{nama_logo}")
+must(st == 200 and hdr.get_content_type() == "image/png" and data == PNG_1PX,
+     "route /logo/<nama> menyajikan berkas logo (juga untuk halaman login)")
+s, url, dash = req(admin, "/dashboard")
+must(f"/logo/{nama_logo}" in dash and "has-logo" in dash,
+     "dashboard memakai logo sekolah sebagai brand (kelas has-logo)")
+s, url, login_page = req(anon, "/login")
+must(f"/logo/{nama_logo}" in login_page, "halaman login ikut memakai logo sekolah")
+s, url, hasil = req(admin, "/admin/tampilan/logo/hapus", {})
+must("Logo dihapus." in hasil, "hapus logo berhasil")
+try:
+    req_bytes(anon, f"/logo/{nama_logo}")
+    must(False, "logo yang dihapus harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "logo terhapus -> 404")
+s, url, dash = req(admin, "/dashboard")
+must("/logo/" not in dash, "setelah logo dihapus brand kembali ke ikon bawaan")
+
 # ===========================================================================
 # Fase H — hapus/nonaktifkan guru berdasarkan riwayat kehadiran
 # ===========================================================================
@@ -574,9 +604,163 @@ must("Guru dihapus." in hasil, "hapus guru tanpa riwayat -> terhapus permanen")
 s, url, daftar_guru = req(admin, "/admin/guru")
 must("guruujitiga" not in daftar_guru, "guru terhapus hilang dari daftar")
 
+# ===========================================================================
+# Fase I — Backup & Pulihkan: unduh ZIP, musibah (DB kosong), pulihkan,
+# berkas salah ditolak, guru tidak boleh akses
+# ===========================================================================
+import json
+import zipfile
+
+DBPULIH = "/tmp/absen-pulih.db"
+DBAMAN = "/tmp/absen-sebelum-pulih.db"
+for _p in (DBPULIH, DBAMAN):
+    if os.path.exists(_p):
+        os.remove(_p)
+
+start_server("2026-11-16T10:00:00")
+admin, url, _ = login("admin", "admin123")
+# guru tidak boleh membuka halaman maupun unduhan backup
+guru, url, _ = login("guruuji", "guruuji123")
+try:
+    req(guru, "/admin/backup")
+    must(False, "guru membuka halaman Backup harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "guru membuka /admin/backup -> 404")
+try:
+    req_bytes(guru, "/admin/backup/unduh")
+    must(False, "guru mengunduh backup harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "guru membuka /admin/backup/unduh -> 404")
+# data khusus backup: kelas + siswa baru
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Backup"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kb = opt_val(form_siswa, "UJI-Kelas-Backup")
+must(kb, "kelas khusus backup dibuat")
+req(admin, "/admin/siswa", {"nama": "Siswa Uji Backup", "kode": "UJI-BKP", "class_id": kb})
+# wallpaper dipasang agar ZIP backup berisi folder uploads/
+s, url, hasil = unggah(admin, "/admin/tampilan/wallpaper", "wallpaper",
+                       "wp-backup.png", PNG_1PX)
+must("Wallpaper dipasang." in hasil, "wallpaper terpasang sebelum backup dibuat")
+# halaman backup untuk admin: tautan unduh + peringatan penggantian data
+s, url, hal_backup = req(admin, "/admin/backup")
+must("Backup & Pulihkan" in hal_backup and "/admin/backup/unduh" in hal_backup
+     and "MENGGANTI" in hal_backup and "SELURUH data" in hal_backup,
+     "halaman Backup tampil dengan tombol unduh + peringatan jelas")
+# unduh backup & periksa isi ZIP
+st, hdr, zipdata = req_bytes(admin, "/admin/backup/unduh")
+must(st == 200 and hdr.get_content_type() == "application/zip",
+     "unduh backup -> 200 dengan content-type zip")
+cd = hdr.get("Content-Disposition") or ""
+must("backup-absen-2026-11-16.zip" in cd,
+     f"nama berkas backup memakai tanggal Jakarta: {cd}")
+zf = zipfile.ZipFile(io.BytesIO(zipdata))
+names = zf.namelist()
+must(any(n.endswith(".db") and "/" not in n for n in names),
+     f"ZIP backup berisi file database: {names}")
+must("manifest.json" in names, "ZIP backup berisi manifest.json")
+manifes = json.loads(zf.read("manifest.json").decode("utf-8"))
+must(manifes.get("app") == "absen-multi-guru" and manifes.get("versi") == 1
+     and bool(manifes.get("dibuat")), "manifest backup: app, versi & waktu dibuat benar")
+must(any(n.startswith("uploads/") and not n.endswith("/") for n in names),
+     "ZIP backup berisi berkas di folder uploads/ (wallpaper)")
+
+# --- skenario musibah: server baru dengan database yang benar-benar kosong ---
+start_server("2026-11-16T10:05:00", dbfile=DBPULIH)
+admin2, url, _ = login("admin", "admin123")
+must("dashboard" in url, "DB kosong baru: login admin awal berhasil")
+s, url, daftar_kosong = req(admin2, "/admin/siswa")
+must("Siswa Uji Backup" not in daftar_kosong,
+     "DB baru masih kosong (data backup belum ada)")
+# pulihkan dari ZIP yang tadi diunduh
+s, url, hasil = unggah(admin2, "/admin/backup/pulihkan", "berkas",
+                       "backup-absen-2026-11-16.zip", zipdata, "application/zip")
+must("/login" in url and "Backup dipulihkan. Silakan masuk lagi." in hasil,
+     "pulihkan backup -> diarahkan ke login dengan pesan sukses")
+must(os.path.exists(DBAMAN),
+     "salinan aman DB sebelum pulih tersimpan (absen-sebelum-pulih.db)")
+admin2, url, _ = login("admin", "admin123")
+must("dashboard" in url, "login lagi setelah pulih berhasil (akun dari backup)")
+s, url, daftar_siswa = req(admin2, "/admin/siswa")
+must("Siswa Uji Backup" in daftar_siswa and "UJI-BKP" in daftar_siswa,
+     "setelah pulih: siswa dari backup kembali tampil di daftar")
+s, url, daftar_kelas = req(admin2, "/admin/kelas")
+must("UJI-Kelas-Backup" in daftar_kelas,
+     "setelah pulih: kelas dari backup kembali tampil di daftar")
+s, url, hal_tampilan = req(admin2, "/admin/tampilan")
+must(re.search(r"/wallpaper/[0-9a-f]{24}\.png", hal_tampilan) is not None,
+     "setelah pulih: wallpaper dari backup ikut kembali terpasang")
+# berkas yang salah ditolak & data tidak berubah
+s, url, hasil = unggah(admin2, "/admin/backup/pulihkan", "berkas",
+                       "bukan-backup.png", PNG_1PX)
+must("Berkas bukan file ZIP" in hasil, "unggah PNG (bukan ZIP) ditolak dengan pesan jelas")
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as z:
+    z.writestr("manifest.json", json.dumps({"app": "data-jemaat-gereja", "versi": 1}))
+    z.writestr("jemaat.db", b"dummy")
+s, url, hasil = unggah(admin2, "/admin/backup/pulihkan", "berkas",
+                       "backup-gereja.zip", buf.getvalue(), "application/zip")
+must("Berkas ini bukan backup aplikasi absen." in hasil,
+     "ZIP backup aplikasi lain (gereja) ditolak")
+s, url, daftar_siswa = req(admin2, "/admin/siswa")
+must("Siswa Uji Backup" in daftar_siswa,
+     "data tidak berubah setelah dua pemulihan yang ditolak")
+
+# ===========================================================================
+# Fase J — Kamera gerbang MENYALA TERUS (scan berkelanjutan, halaman tidak
+# reload) + mode ajax /api/scan membalas JSON berisi banner & daftar terbaru
+# ===========================================================================
+start_server("2026-11-17T06:50:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hal_scan = req(admin, "/scan-gerbang")
+must("Nyalakan Kamera" in hal_scan and "Matikan Kamera" in hal_scan,
+     "halaman scan: tombol 'Nyalakan Kamera' & 'Matikan Kamera'")
+must('id="hasilScan"' in hal_scan and 'id="daftarDatang"' in hal_scan
+     and 'id="jumlahDatang"' in hal_scan,
+     "halaman scan: wadah hasil + daftar kedatangan untuk update tanpa reload")
+st, hdr, js_bytes = req_bytes(admin, "/static/app.js")
+js = js_bytes.decode("utf-8")
+must("JEDA_GLOBAL_MS" in js and "DINGIN_KODE_MS" in js
+     and "terakhirPerKode" in js and "catatKode" in js,
+     "app.js: mekanisme jeda global + masa dingin per kode (anti scan dobel)")
+must("matikanKamera" in js and "getTracks" in js and "pagehide" in js,
+     "app.js: kamera hanya mati lewat Matikan Kamera / meninggalkan halaman")
+must("form.submit()" not in js,
+     "app.js: TIDAK ada lagi kirim form (reload halaman) setelah QR terbaca")
+must("fetch('/api/scan'" in js and "'ajax'" in js,
+     "app.js: hasil scan dikirim lewat fetch mode ajax ke /api/scan")
+# mode ajax: scan pertama membalas JSON Hadir + daftar kedatangan terisi
+s, url, resp = req(admin, "/api/scan", {"kode": "UJI-001", "ajax": "1"})
+data_scan = json.loads(resp)
+must(data_scan["jenis"] == "hadir" and data_scan["judul"] == "Siswa Uji A"
+     and "06:50" in data_scan["pesan"],
+     "ajax scan siswa A 06:50 -> JSON Hadir 06:50")
+must(data_scan["jumlah"] == 1 and "Siswa Uji A" in data_scan["items"],
+     "ajax: daftar kedatangan terbarui memuat siswa A (jumlah 1)")
+# mode ajax: scan ulang -> info 'Sudah tercatat', daftar tidak berubah
+s, url, resp = req(admin, "/api/scan", {"kode": "UJI-001", "ajax": "1"})
+data_scan = json.loads(resp)
+must(data_scan["jenis"] == "info" and "Sudah tercatat" in data_scan["judul"]
+     and data_scan["jumlah"] == 1,
+     "ajax scan ulang -> 'Sudah tercatat', jumlah tetap 1")
+# mode ajax: kode asing -> JSON error
+s, url, resp = req(admin, "/api/scan", {"kode": "TIDAK-ADA", "ajax": "1"})
+data_scan = json.loads(resp)
+must(data_scan["jenis"] == "error" and "tidak dikenal" in data_scan["judul"],
+     "ajax kode asing -> JSON error 'Kode tidak dikenal'")
+# tanpa ajax: perilaku lama (balasan halaman penuh) tetap jalan persis sama
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-002"})
+must("Siswa Uji B" in hasil and "Scan Gerbang" in hasil and "Hadir" in hasil,
+     "POST /api/scan tanpa ajax tetap membalas halaman penuh seperti sebelumnya")
+must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal='2026-11-17' "
+         "AND ref_type='siswa'") == 2,
+     "dua scan (ajax + non-ajax) tercatat sebagai kehadiran 2026-11-17")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)
+for _p in (DBPULIH, DBAMAN):
+    if os.path.exists(_p):
+        os.remove(_p)
 if os.path.isdir(UPLOAD_DIR):
     for nama in set(os.listdir(UPLOAD_DIR)) - uploads_awal:
         try:

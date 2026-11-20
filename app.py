@@ -22,11 +22,15 @@ Jalankan:  python3 app.py            (default http://127.0.0.1:8000)
 import hashlib
 import html
 import io
+import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
+import tempfile
 import urllib.parse
+import zipfile
 from datetime import datetime, timedelta, time as dtime
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -307,10 +311,21 @@ def nav_items(user):
         items += [("siswa", "/admin/siswa", "Siswa", "cap"),
                   ("guru", "/admin/guru", "Guru", "badge"),
                   ("kelas", "/admin/kelas", "Kelas", "building"),
-                  ("tampilan", "/admin/tampilan", "Pengaturan Tampilan", "sliders")]
+                  ("tampilan", "/admin/tampilan", "Pengaturan Tampilan", "sliders"),
+                  ("backup", "/admin/backup", "Backup & Pulihkan", "download")]
     items += [("cetak", "/cetak", "Cetak Kartu", "printer"),
               ("ganti-password", "/ganti-password", "Ganti Password", "key")]
     return items
+
+
+def brand_mark(peng, sm=False):
+    """Tanda brand aplikasi: logo sekolah terunggah bila sudah dipasang,
+    kalau belum pakai ikon SVG bawaan. Nama sekolah di sebelahnya tidak berubah."""
+    cls = "brand-mark sm" if sm else "brand-mark"
+    if peng.get("logo"):
+        return (f'<span class="{cls} has-logo">'
+                f'<img src="/logo/{esc(peng["logo"])}" alt="Logo sekolah"></span>')
+    return f'<span class="{cls}">{icon("logo")}</span>'
 
 
 def layout(user, title, body, flash="", aktif=""):
@@ -331,7 +346,7 @@ def layout(user, title, body, flash="", aktif=""):
 <link rel="stylesheet" href="/static/style.css"></head>
 <body class="auth-body"{bg_style}>{wp_layer}<div class="auth-wrap">
 <div class="auth-card">
-<div class="auth-brand"><span class="brand-mark">{icon('logo')}</span>
+<div class="auth-brand">{brand_mark(peng)}
 <span class="brand-name">{esc(nama_app)}</span></div>
 {flash_html}{body}</div>
 <p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
@@ -357,7 +372,7 @@ def layout(user, title, body, flash="", aktif=""):
 <link rel="stylesheet" href="/static/style.css"></head>
 <body{bg_style}>{wp_layer}<div class="shell">
 <aside class="sidebar">
-<div class="brand"><span class="brand-mark">{icon('logo')}</span>
+<div class="brand">{brand_mark(peng)}
 <span class="brand-name">{esc(nama_app)}</span></div>
 <nav class="sidenav">{sidenav}</nav>
 <div class="userchip"><span class="avatar">{initial}</span>
@@ -365,7 +380,7 @@ def layout(user, title, body, flash="", aktif=""):
 <a class="logout-btn" href="/logout" title="Keluar">{icon('logout')}</a></div>
 </aside>
 <div class="content">
-<header class="topbar"><span class="brand-mark sm">{icon('logo')}</span>
+<header class="topbar">{brand_mark(peng, sm=True)}
 <span class="topbar-title">{esc(nama_app)}</span><span class="avatar">{initial}</span></header>
 <main>{flash_html}{body}</main>
 <footer><small>&copy; {tahun} {esc(nama_app)} &bull; Absensi gerbang sekolah &bull; QR Code biasa (bukan QRIS pembayaran)</small></footer>
@@ -464,6 +479,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.qr_png(path[4:-4])
         if path.startswith("/wallpaper/"):
             return self.wallpaper_file(path[len("/wallpaper/"):])
+        if path.startswith("/logo/"):
+            return self.logo_file(path[len("/logo/"):])
         if path == "/":
             return self.redirect("/dashboard")
         if path == "/login":
@@ -525,6 +542,8 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/admin/siswa/") and path.endswith("/edit"):
                 return self.admin_siswa_edit(user, int(path.split("/")[3]), flash)
             if path == "/admin/tampilan": return self.admin_tampilan(user, flash)
+            if path == "/admin/backup": return self.admin_backup(user, flash)
+            if path == "/admin/backup/unduh": return self.admin_backup_unduh()
         return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>",
                                      aktif=""), status=404)
 
@@ -540,6 +559,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
                                       status=404)
             return self.post_admin_tampilan_wallpaper()
+        if path == "/admin/tampilan/logo":
+            if user["role"] != "admin":
+                return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                                      status=404)
+            return self.post_admin_tampilan_logo()
+        if path == "/admin/backup/pulihkan":
+            if user["role"] != "admin":
+                return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                                      status=404)
+            return self.post_admin_backup_pulihkan()
         f = self.form()
         if path == "/ganti-password":
             ph, salt = hash_password(f["password"])
@@ -573,6 +602,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/tampilan": return self.post_admin_tampilan(f)
             if path == "/admin/tampilan/wallpaper/hapus":
                 return self.post_admin_tampilan_wallpaper_hapus()
+            if path == "/admin/tampilan/logo/hapus":
+                return self.post_admin_tampilan_logo_hapus()
         return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
                               status=404)
 
@@ -673,46 +704,72 @@ class Handler(BaseHTTPRequestHandler):
                WHERE k.tanggal=? AND k.ref_type='guru' AND k.metode='scan'
                ORDER BY jam DESC""", (tgl, tgl)).fetchall()
 
-    def scan_gerbang(self, user, flash, hasil=None):
-        now = waktu_sekarang()
-        tgl = now.strftime("%Y-%m-%d")
-        conn = db()
+    def _daftar_datang_html(self, conn, tgl):
+        """(jumlah, HTML <li>) daftar kedatangan scan hari ini — dipakai halaman
+        Scan Gerbang dan balasan JSON mode ajax (update daftar tanpa reload)."""
         datang = self._kedatangan_hari_ini(conn, tgl)
-        conn.close()
-        hasil_html = ""
-        if hasil:
-            hasil_html = (f'<div class="hasil hasil-{hasil["jenis"]}">'
-                          f'<div class="hasil-nama">{esc(hasil["judul"])}</div>'
-                          f'<div class="hasil-meta">{esc(hasil["pesan"])}</div></div>')
         items = "".join(
             f'<li><span class="pill p-{r["status"].lower()}">{esc(r["status"])}</span> '
             f'<b>{esc(r["nama"])}</b> <span class="muted">{esc(r["tipe"])} &bull; '
             f'{esc(r["sub"] or "")}</span> <span class="jam">{esc(r["jam"] or "")}</span></li>'
             for r in datang)
         items = items or '<li class="muted">Belum ada yang scan hari ini.</li>'
+        return len(datang), items
+
+    def scan_gerbang(self, user, flash, hasil=None):
+        now = waktu_sekarang()
+        tgl = now.strftime("%Y-%m-%d")
+        conn = db()
+        jumlah_datang, items = self._daftar_datang_html(conn, tgl)
+        conn.close()
+        hasil_html = ""
+        if hasil:
+            hasil_html = (f'<div class="hasil hasil-{hasil["jenis"]}">'
+                          f'<div class="hasil-nama">{esc(hasil["judul"])}</div>'
+                          f'<div class="hasil-meta">{esc(hasil["pesan"])}</div></div>')
         body = f"""<h2>Scan Gerbang</h2>
         <p class="muted">{esc(NAMA_HARI[now.weekday()])}, {esc(fmt_tanggal(now.date()))} &bull;
         pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; 07:00 = Hadir, lewat = Terlambat</p>
-        {hasil_html}
+        <div id="hasilScan">{hasil_html}</div>
         <section class="card scan-card">
           <div class="scan-frame"><video id="cam" autoplay playsinline muted></video></div>
-          <div class="scan-btns"><button type="button" id="btnCam" class="btn btn-primary">Mulai Kamera</button>
-          <button type="button" id="btnStop" class="btn btn-ghost" disabled>Stop Kamera</button></div>
+          <div class="scan-btns"><button type="button" id="btnCam" class="btn btn-primary">Nyalakan Kamera</button>
+          <button type="button" id="btnStop" class="btn btn-ghost" disabled>Matikan Kamera</button></div>
           <p id="scanStatus" class="muted"><small>Kamera memakai getUserMedia + jsQR.
-          Arahkan kartu QR siswa/guru ke kamera. Bila kamera tidak tersedia, ketik NIS / kode guru di bawah.</small></p>
+          Sekali dinyalakan, kamera TETAP MENYALA dan tiap kartu QR yang terbaca
+          langsung tercatat &mdash; matikan manual bila sudah selesai.
+          Bila kamera tidak tersedia, ketik NIS / kode guru di bawah.</small></p>
           <form method="post" action="/api/scan" id="scanForm">
             <label>NIS siswa / kode QR guru (hasil scan / ketik manual)
               <input name="kode" id="kodeInput" required autocomplete="off"></label>
             <button type="submit" class="btn btn-primary">Catat dari Kode</button></form>
         </section>
-        <section class="card"><h3>Sudah Scan Hari Ini ({len(datang)})</h3>
-        <ul class="arrivals">{items}</ul></section>
+        <section class="card"><h3>Sudah Scan Hari Ini (<span id="jumlahDatang">{jumlah_datang}</span>)</h3>
+        <ul class="arrivals" id="daftarDatang">{items}</ul></section>
         <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
         <script src="/static/app.js"></script>"""
         return self.send_html(layout(user, "Scan Gerbang", body, flash, aktif="scan"))
 
     def post_scan(self, user, f):
         kode = (f.get("kode") or "").strip()
+        hasil = self._proses_scan(user, kode)
+        if (f.get("ajax") or "") == "1":
+            # Mode ajax (kamera menyala terus): balas JSON berisi banner hasil
+            # + daftar kedatangan terbaru; halaman TIDAK dimuat ulang sehingga
+            # stream kamera tidak mati.
+            tgl = waktu_sekarang().strftime("%Y-%m-%d")
+            conn = db()
+            jumlah, items = self._daftar_datang_html(conn, tgl)
+            conn.close()
+            data = json.dumps({"jenis": hasil["jenis"], "judul": hasil["judul"],
+                               "pesan": hasil["pesan"], "jumlah": jumlah,
+                               "items": items}).encode("utf-8")
+            return self.send_bytes(data, "application/json")
+        return self.scan_gerbang(user, "", hasil=hasil)
+
+    def _proses_scan(self, user, kode):
+        """Catat satu kode scan untuk HARI INI; kembalikan dict hasil
+        {jenis, judul, pesan} untuk ditampilkan sebagai banner."""
         now = waktu_sekarang()
         tgl = now.strftime("%Y-%m-%d")
         jam = now.strftime("%H:%M")
@@ -727,9 +784,9 @@ class Handler(BaseHTTPRequestHandler):
                 (kode,)).fetchone()
         if not siswa and not guru_row:
             conn.close()
-            return self.scan_gerbang(user, "", hasil={
+            return {
                 "jenis": "error", "judul": "Kode tidak dikenal.",
-                "pesan": f"Kode '{kode}' tidak terdaftar sebagai NIS siswa maupun kode guru."})
+                "pesan": f"Kode '{kode}' tidak terdaftar sebagai NIS siswa maupun kode guru."}
         if siswa:
             ref_type, ref_id, nama = "siswa", siswa["id"], siswa["nama"]
             sub = siswa["kelas"]
@@ -745,19 +802,19 @@ class Handler(BaseHTTPRequestHandler):
         if ada:
             if ada["metode"] == "scan":
                 conn.close()
-                return self.scan_gerbang(user, "", hasil={
+                return {
                     "jenis": "info", "judul": "Sudah tercatat",
-                    "pesan": f"{nama} sudah tercatat {ada['status']} pukul {ada['jam'] or '-'} hari ini."})
+                    "pesan": f"{nama} sudah tercatat {ada['status']} pukul {ada['jam'] or '-'} hari ini."}
             if ada["status"] in ("Sakit", "Izin"):
                 conn.close()
-                return self.scan_gerbang(user, "", hasil={
+                return {
                     "jenis": "info", "judul": f"{nama} ditandai {ada['status']}",
-                    "pesan": f"{nama} hari ini ditandai {ada['status']} (manual), scan tidak mengubahnya."})
+                    "pesan": f"{nama} hari ini ditandai {ada['status']} (manual), scan tidak mengubahnya."}
             if ada["metode"] == "manual":
                 conn.close()
-                return self.scan_gerbang(user, "", hasil={
+                return {
                     "jenis": "info", "judul": "Sudah tercatat",
-                    "pesan": f"{nama} sudah tercatat {ada['status']} (manual) hari ini."})
+                    "pesan": f"{nama} sudah tercatat {ada['status']} (manual) hari ini."}
             # metode 'auto' (Alpa otomatis) -> ganti dengan catatan scan di bawah.
             conn.execute("DELETE FROM kehadiran WHERE id=?", (ada["id"],))
         status = "Hadir" if now.time() <= JAM_BATAS_HADIR else "Terlambat"
@@ -766,9 +823,9 @@ class Handler(BaseHTTPRequestHandler):
                VALUES (?,?,?,?,?,'scan',?)""",
             (tgl, ref_type, ref_id, status, jam, user["id"]))
         conn.commit(); conn.close()
-        return self.scan_gerbang(user, "", hasil={
+        return {
             "jenis": status.lower(), "judul": nama,
-            "pesan": f"{sub} • {status} • {jam}"})
+            "pesan": f"{sub} • {status} • {jam}"}
 
 
     # -- tabel mingguan ---------------------------------------------------------
@@ -1320,7 +1377,7 @@ WALLPAPER_NAMA_RE = re.compile(r"^[0-9a-f]{24}\.(jpg|jpeg|png|webp)$")
 
 def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
-    peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": ""}
+    peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": ""}
     try:
         conn = db()
         for r in conn.execute("SELECT key, value FROM settings").fetchall():
@@ -1333,6 +1390,8 @@ def get_pengaturan():
         peng["bg_color"] = BG_DEFAULT
     if peng["wallpaper"] and not WALLPAPER_NAMA_RE.match(peng["wallpaper"]):
         peng["wallpaper"] = ""
+    if peng["logo"] and not WALLPAPER_NAMA_RE.match(peng["logo"]):
+        peng["logo"] = ""
     return peng
 
 
@@ -1740,6 +1799,13 @@ def _admin_tampilan(self, user, flash):
         <form method="post" action="/admin/tampilan/wallpaper/hapus" class="inline"
           onsubmit="return confirm('Hapus wallpaper? Latar kembali hanya warna saja.')">
           <button type="submit" class="btn btn-danger">Hapus Wallpaper</button></form>"""
+    logo_html = ""
+    if peng["logo"]:
+        logo_html = f"""<div class="logo-preview"><img src="/logo/{esc(peng['logo'])}"
+          alt="Logo sekolah saat ini"></div>
+        <form method="post" action="/admin/tampilan/logo/hapus" class="inline"
+          onsubmit="return confirm('Hapus logo sekolah? Brand kembali ke ikon bawaan.')">
+          <button type="submit" class="btn btn-danger">Hapus Logo</button></form>"""
     body = f"""<h2>Pengaturan Tampilan</h2>
     <div class="card form-card"><h3>Nama Sekolah &amp; Warna Latar</h3>
     <form method="post" action="/admin/tampilan">
@@ -1764,7 +1830,17 @@ def _admin_tampilan(self, user, flash):
     <form method="post" action="/admin/tampilan/wallpaper" enctype="multipart/form-data">
       <label>Unggah / ganti wallpaper <input type="file" name="wallpaper"
         accept=".jpg,.jpeg,.png,.webp" required></label>
-      <button type="submit" class="btn btn-primary">Unggah Wallpaper</button></form></div>"""
+      <button type="submit" class="btn btn-primary">Unggah Wallpaper</button></form></div>
+    <div class="card form-card"><h3>Logo Sekolah</h3>
+    <p class="muted">Logo tampil sebagai tanda brand di menu samping, bilah atas,
+    dan halaman login &mdash; menggantikan ikon bawaan. Nama sekolah di sebelahnya
+    tidak berubah. Format JPG/PNG/WebP, maks &plusmn;5 MB. Pakai gambar persegi
+    agar tampil rapi.</p>
+    {logo_html}
+    <form method="post" action="/admin/tampilan/logo" enctype="multipart/form-data">
+      <label>Unggah / ganti logo <input type="file" name="logo"
+        accept=".jpg,.jpeg,.png,.webp" required></label>
+      <button type="submit" class="btn btn-primary">Unggah Logo</button></form></div>"""
     return self.send_html(layout(user, "Pengaturan Tampilan", body, flash, aktif="tampilan"))
 
 
@@ -1838,6 +1914,211 @@ def _wallpaper_file(self, nama):
     return self.send_bytes(data, WALLPAPER_EXT.get(ext, "application/octet-stream"))
 
 
+def _post_admin_tampilan_logo(self):
+    length = int(self.headers.get("Content-Length", "0") or "0")
+    if length > 6 * 1024 * 1024:
+        return self.redirect("/admin/tampilan", "Berkas terlalu besar (maks \u00b15 MB).")
+    body = self.rfile.read(length) if length else b""
+    _fields, files = parse_multipart(body, self.headers.get("Content-Type", ""))
+    berkas = files.get("logo")
+    if not berkas or not berkas[0]:
+        return self.redirect("/admin/tampilan", "Pilih berkas gambar dulu.")
+    filename, data = berkas
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in WALLPAPER_EXT:
+        return self.redirect("/admin/tampilan",
+                             "Format tidak didukung. Pakai JPG, PNG, atau WebP.")
+    if len(data) > 5 * 1024 * 1024:
+        return self.redirect("/admin/tampilan", "Berkas terlalu besar (maks \u00b15 MB).")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    lama = get_pengaturan()["logo"]
+    nama_baru = secrets.token_hex(12) + ext
+    with open(os.path.join(UPLOAD_DIR, nama_baru), "wb") as fh:
+        fh.write(data)
+    conn = db()
+    set_pengaturan(conn, "logo", nama_baru)
+    conn.commit(); conn.close()
+    if lama and lama != nama_baru:
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, lama))
+        except OSError:
+            pass
+    return self.redirect("/admin/tampilan", "Logo dipasang.")
+
+
+def _post_admin_tampilan_logo_hapus(self):
+    lama = get_pengaturan()["logo"]
+    conn = db()
+    set_pengaturan(conn, "logo", "")
+    conn.commit(); conn.close()
+    if lama:
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, lama))
+        except OSError:
+            pass
+    return self.redirect("/admin/tampilan", "Logo dihapus. Brand kembali ke ikon bawaan.")
+
+
+def _logo_file(self, nama):
+    # Logo & wallpaper sama-sama berkas unggahan bernama-token di data/uploads/,
+    # jadi penyajiannya identik dengan wallpaper.
+    return _wallpaper_file(self, nama)
+
+
+# -- admin: backup & pulihkan --------------------------------------------------
+BACKUP_APP = "absen-multi-guru"
+BACKUP_MAKS = 50 * 1024 * 1024  # batas ukuran berkas backup yang diunggah
+
+
+def _admin_backup(self, user, flash):
+    body = f"""<h2>Backup &amp; Pulihkan</h2>
+    <div class="card form-card"><h3>Unduh Backup</h3>
+    <p class="muted">Unduh satu berkas ZIP berisi salinan seluruh database aplikasi
+    (data guru, kelas, siswa, kehadiran, dan pengaturan) beserta gambar wallpaper.
+    Simpan berkasnya di tempat yang aman. Biasakan membuat backup secara berkala,
+    terutama sebelum memasang pembaruan aplikasi &mdash; jadi kalau terjadi apa-apa,
+    data bisa dikembalikan dari backup, tidak perlu mengisi ulang dari awal.</p>
+    <p><a class="btn btn-primary" href="/admin/backup/unduh">{icon('download')}
+    Unduh Backup (.zip)</a></p></div>
+    <div class="card form-card"><h3>Pulihkan dari Backup</h3>
+    <p class="flash warn"><b>PERINGATAN:</b> memulihkan backup akan MENGGANTI
+    SELURUH data yang ada sekarang dengan isi backup tersebut. Data apa pun yang
+    masuk setelah backup dibuat akan hilang. Unduh backup terbaru dulu sebelum
+    memulihkan backup yang lama.</p>
+    <form method="post" action="/admin/backup/pulihkan" enctype="multipart/form-data"
+      onsubmit="return confirm('Pulihkan backup ini? SELURUH data sekarang akan diganti dengan isi backup.')">
+      <label>Berkas backup (.zip) <input type="file" name="berkas" accept=".zip" required></label>
+      <button type="submit" class="btn btn-danger">Pulihkan Backup</button></form>
+    <p class="muted"><small>Setelah pemulihan berhasil, semua pengguna yang sedang
+    masuk akan dikeluarkan dan Anda diminta masuk lagi.</small></p></div>"""
+    return self.send_html(layout(user, "Backup & Pulihkan", body, flash, aktif="backup"))
+
+
+def _admin_backup_unduh(self):
+    # Salinan database yang konsisten lewat sqlite3 backup API (bukan menyalin
+    # berkas mentah yang mungkin sedang ditulis).
+    fd, tmp_db = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        src = db()
+        dst = sqlite3.connect(tmp_db)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(tmp_db, "absen.db")
+            if os.path.isdir(UPLOAD_DIR):
+                for nama in sorted(os.listdir(UPLOAD_DIR)):
+                    p = os.path.join(UPLOAD_DIR, nama)
+                    if os.path.isfile(p):
+                        z.write(p, f"uploads/{nama}")
+            manifest = {"app": BACKUP_APP,
+                        "dibuat": waktu_sekarang().isoformat(timespec="seconds"),
+                        "versi": 1}
+            z.writestr("manifest.json", json.dumps(manifest, indent=2))
+        data = buf.getvalue()
+    finally:
+        try:
+            os.remove(tmp_db)
+        except OSError:
+            pass
+    nama_file = f"backup-absen-{waktu_sekarang().strftime('%Y-%m-%d')}.zip"
+    return self.send_bytes(data, "application/zip", filename=nama_file)
+
+
+def _post_admin_backup_pulihkan(self):
+    def gagal(pesan):
+        return self.redirect("/admin/backup", pesan)
+
+    length = int(self.headers.get("Content-Length", "0") or "0")
+    if length > BACKUP_MAKS:
+        return gagal("Berkas terlalu besar untuk berkas backup.")
+    body = self.rfile.read(length) if length else b""
+    _fields, files = parse_multipart(body, self.headers.get("Content-Type", ""))
+    berkas = files.get("berkas")
+    if not berkas or not berkas[0]:
+        return gagal("Pilih berkas backup dulu.")
+    _nama, data = berkas
+    bio = io.BytesIO(data)
+    if not zipfile.is_zipfile(bio):
+        return gagal("Berkas bukan file ZIP backup yang valid.")
+    bio.seek(0)
+    try:
+        z = zipfile.ZipFile(bio)
+        names = z.namelist()
+        # --- validasi: manifest harus milik aplikasi absen ini ---
+        if "manifest.json" not in names:
+            return gagal("Berkas ini bukan backup aplikasi absen.")
+        try:
+            manifest = json.loads(z.read("manifest.json").decode("utf-8"))
+        except Exception:
+            return gagal("Berkas ini bukan backup aplikasi absen.")
+        if not isinstance(manifest, dict) or manifest.get("app") != BACKUP_APP:
+            return gagal("Berkas ini bukan backup aplikasi absen.")
+        db_entries = [n for n in names if n.endswith(".db") and "/" not in n]
+        if not db_entries:
+            return gagal("Backup tidak berisi file database.")
+        db_bytes = z.read(db_entries[0])
+        uploads_baru = {}
+        for n in names:
+            if n.startswith("uploads/") and not n.endswith("/"):
+                dasar = os.path.basename(n[len("uploads/"):])
+                if dasar:
+                    uploads_baru[dasar] = z.read(n)
+    except zipfile.BadZipFile:
+        return gagal("Berkas bukan file ZIP backup yang valid.")
+    # --- validasi isi database: harus SQLite dengan tabel aplikasi ---
+    fd, tmp_db = tempfile.mkstemp(suffix=".db")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(db_bytes)
+        try:
+            cek = sqlite3.connect(tmp_db)
+            ada_users = cek.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+            ).fetchone()
+            cek.close()
+        except sqlite3.Error:
+            ada_users = None
+        if not ada_users:
+            return gagal("File database di dalam backup tidak valid.")
+        # --- semua valid: baru sekarang data diganti ---
+        # 1) salinan aman database saat ini, di samping file DB aktif
+        aman = os.path.join(os.path.dirname(DB_PATH) or ".",
+                            "absen-sebelum-pulih.db")
+        if os.path.isfile(DB_PATH):
+            shutil.copyfile(DB_PATH, aman)
+        # 2) ganti database secara atomik
+        tmp_ganti = DB_PATH + ".tmp-pulih"
+        with open(tmp_ganti, "wb") as fh:
+            fh.write(db_bytes)
+        os.replace(tmp_ganti, DB_PATH)
+    finally:
+        try:
+            os.remove(tmp_db)
+        except OSError:
+            pass
+    # 3) ganti isi folder uploads dengan isi backup
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    for nama in os.listdir(UPLOAD_DIR):
+        p = os.path.join(UPLOAD_DIR, nama)
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    for nama, isi in uploads_baru.items():
+        with open(os.path.join(UPLOAD_DIR, nama), "wb") as fh:
+            fh.write(isi)
+    # 4) keluarkan semua sesi login (lebih aman), minta masuk lagi
+    LOGIN_SESSIONS.clear()
+    return self.redirect("/login", "Backup dipulihkan. Silakan masuk lagi.",
+                         set_cookie="absen_session=; Max-Age=0; Path=/")
+
+
 # Tempelkan handler-handler di atas sebagai method Handler.
 Handler.admin_guru = _admin_guru
 Handler.post_admin_guru = _post_admin_guru
@@ -1865,6 +2146,12 @@ Handler.post_admin_tampilan = _post_admin_tampilan
 Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
 Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
 Handler.wallpaper_file = _wallpaper_file
+Handler.post_admin_tampilan_logo = _post_admin_tampilan_logo
+Handler.post_admin_tampilan_logo_hapus = _post_admin_tampilan_logo_hapus
+Handler.logo_file = _logo_file
+Handler.admin_backup = _admin_backup
+Handler.admin_backup_unduh = _admin_backup_unduh
+Handler.post_admin_backup_pulihkan = _post_admin_backup_pulihkan
 
 
 def main():
