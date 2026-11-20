@@ -280,6 +280,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/kelas": return self.admin_kelas(user, flash)
             if path == "/admin/mapel": return self.admin_mapel(user, flash)
             if path == "/admin/siswa": return self.admin_siswa(user, qs, flash)
+            if path.startswith("/admin/siswa/") and path.endswith("/edit"):
+                return self.admin_siswa_edit(user, int(path.split("/")[3]), flash)
             if path == "/admin/penugasan": return self.admin_penugasan(user, flash)
         if user["role"] == "guru":
             if path == "/guru/sesi": return self.guru_sesi(user, flash)
@@ -306,6 +308,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/kelas": return self.post_admin_kelas(f)
             if path == "/admin/mapel": return self.post_admin_mapel(f)
             if path == "/admin/siswa": return self.post_admin_siswa(f)
+            if path.startswith("/admin/siswa/") and path.endswith("/edit"):
+                return self.post_admin_siswa_edit(int(path.split("/")[3]), f)
+            if path.startswith("/admin/siswa/") and path.endswith("/hapus"):
+                return self.post_admin_siswa_hapus(int(path.split("/")[3]))
             if path == "/admin/penugasan": return self.post_admin_penugasan(f)
         if user["role"] == "guru":
             if path == "/guru/sesi/buat": return self.post_buat_sesi(user, f)
@@ -430,10 +436,18 @@ class Handler(BaseHTTPRequestHandler):
             """SELECT s.*, c.nama kelas FROM students s JOIN classes c ON c.id=s.class_id
                ORDER BY c.nama, s.nama""").fetchall()
         conn.close()
-        items = "".join(
-            f'<li>{esc(r["nama"])} &mdash; kode: <code>{esc(r["kode"])}</code> &mdash; {esc(r["kelas"])} '
-            f'&mdash; <a href="/cetak/{r["class_id"]}">Cetak kartu kelas ini</a></li>' for r in rows) \
-            or "<li>Belum ada siswa.</li>"
+        items = ""
+        for r in rows:
+            nama_js = r["nama"].replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+            confirm_msg = f"Hapus siswa {nama_js}? Catatan absennya juga akan terhapus."
+            items += (
+                f'<li>{esc(r["nama"])} &mdash; kode: <code>{esc(r["kode"])}</code> &mdash; {esc(r["kelas"])} '
+                f'&mdash; <a href="/cetak/{r["class_id"]}">Cetak kartu kelas ini</a> '
+                f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
+                f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
+                f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+                f'<button type="submit">Hapus</button></form></li>')
+        items = items or "<li>Belum ada siswa.</li>"
         body = f"""<h2>Kelola Siswa</h2><ul>{items}</ul>
         <h3>Tambah Siswa</h3>
         <form method="post" action="/admin/siswa">
@@ -452,6 +466,53 @@ class Handler(BaseHTTPRequestHandler):
             return self.redirect("/admin/siswa", "Siswa ditambahkan.")
         except sqlite3.IntegrityError:
             return self.redirect("/admin/siswa", "Kode siswa sudah dipakai.")
+
+    def admin_siswa_edit(self, user, sid, flash):
+        conn = db()
+        st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
+        if not st:
+            conn.close()
+            return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
+        classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
+        conn.close()
+        class_opts = "".join(
+            f'<option value="{c["id"]}"{" selected" if c["id"] == st["class_id"] else ""}>'
+            f'{esc(c["nama"])}</option>' for c in classes)
+        body = f"""<h2>Edit Siswa</h2>
+        <form method="post" action="/admin/siswa/{st['id']}/edit">
+          <label>Nama <input name="nama" value="{esc(st['nama'])}" required></label>
+          <label>Kode unik / NIS <input name="kode" value="{esc(st['kode'])}" required></label>
+          <label>Kelas <select name="class_id">{class_opts}</select></label>
+          <button type="submit">Simpan Perubahan</button></form>
+        <p><a href="/admin/siswa">Kembali ke daftar siswa</a></p>"""
+        return self.send_html(layout(user, "Edit Siswa", body, flash))
+
+    def post_admin_siswa_edit(self, sid, f):
+        conn = db()
+        st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
+        if not st:
+            conn.close()
+            return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
+        try:
+            conn.execute("UPDATE students SET nama=?, kode=?, class_id=? WHERE id=?",
+                         (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]), sid))
+            conn.commit(); conn.close()
+            return self.redirect("/admin/siswa", "Siswa diperbarui.")
+        except sqlite3.IntegrityError:
+            conn.close()
+            return self.redirect(f"/admin/siswa/{sid}/edit", "Kode siswa sudah dipakai.")
+
+    def post_admin_siswa_hapus(self, sid):
+        conn = db()
+        st = conn.execute("SELECT * FROM students WHERE id=?", (sid,)).fetchone()
+        if not st:
+            conn.close()
+            return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
+        # Satu transaksi: hapus catatan absen siswa dulu, baru siswanya.
+        conn.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
+        conn.execute("DELETE FROM students WHERE id=?", (sid,))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/siswa", "Siswa dihapus.")
 
     # -- admin: penugasan -----------------------------------------------------
     def admin_penugasan(self, user, flash):

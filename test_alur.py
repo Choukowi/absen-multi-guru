@@ -84,4 +84,43 @@ must("UJI-001" in csv_body and "Hadir" in csv_body, "unduh CSV rekap berisi cata
 # 6. Guru lain tidak bisa lihat sesi ini (isolasi peran): admin bisa
 s, url, rekap_admin = req(admin, "/rekap")
 must("UJI-Matematika" in rekap_admin, "admin melihat rekap semua guru")
+
+# 7. Edit & hapus siswa (admin)
+s, url, daftar = req(admin, "/admin/siswa")
+must("Edit" in daftar and "Hapus" in daftar, "daftar siswa menampilkan tombol Edit dan Hapus")
+def siswa_id(htmltxt, kode):
+    for chunk in htmltxt.split("<li>"):
+        if kode in chunk:
+            m = re.search(r"/admin/siswa/(\d+)/edit", chunk)
+            if m: return m.group(1)
+    return None
+dua_id = siswa_id(daftar, "UJI-002"); satu_id = siswa_id(daftar, "UJI-001")
+must(dua_id and satu_id, f"id siswa terbaca dari daftar: UJI-001={satu_id} UJI-002={dua_id}")
+# form edit terisi data awal
+s, url, form_edit = req(admin, f"/admin/siswa/{dua_id}/edit")
+must("Siswa Uji Dua" in form_edit and "UJI-002" in form_edit, "form edit siswa terisi data awal (nama & kode)")
+# edit nama siswa UJI-002 -> nama baru tampil, nama lama hilang
+req(admin, f"/admin/siswa/{dua_id}/edit", {"nama": "Siswa Uji Dua Revisi", "kode": "UJI-002", "class_id": kelas_id})
+s, url, daftar = req(admin, "/admin/siswa")
+must("Siswa Uji Dua Revisi" in daftar, "hasil edit nama siswa tampil di daftar")
+must("Siswa Uji Dua" not in daftar.replace("Siswa Uji Dua Revisi", ""), "nama lama siswa sudah tidak ada di daftar")
+# edit kode ke kode milik siswa lain harus ditolak
+s, url, form_edit = req(admin, f"/admin/siswa/{dua_id}/edit", {"nama": "Siswa Uji Dua Revisi", "kode": "UJI-001", "class_id": kelas_id})
+must("Kode siswa sudah dipakai." in form_edit, "edit kode ke kode siswa lain ditolak dengan pesan")
+s, url, daftar = req(admin, "/admin/siswa")
+must("UJI-002" in daftar, "kode siswa tidak berubah setelah edit yang ditolak")
+# id siswa tidak ada -> diarahkan kembali dengan pesan
+s, url, daftar404 = req(admin, "/admin/siswa/999999/edit")
+must("Siswa tidak ditemukan." in daftar404, "edit id siswa tidak ada diarahkan ke daftar dengan pesan")
+# hapus siswa UJI-002 (sudah diedit namanya)
+req(admin, f"/admin/siswa/{dua_id}/hapus", {})
+s, url, daftar = req(admin, "/admin/siswa")
+must("Siswa Uji Dua Revisi" not in daftar and "UJI-002" not in daftar, "siswa terhapus hilang dari daftar")
+# hapus siswa UJI-001 yang SUDAH punya catatan absen Hadir -> harus berhasil, absen ikut terhapus
+s, url, hasil_hapus = req(admin, f"/admin/siswa/{satu_id}/hapus", {})
+must("Siswa dihapus." in hasil_hapus, "hapus siswa ber-catatan absen berhasil dengan pesan 'Siswa dihapus.'")
+s, url, daftar = req(admin, "/admin/siswa")
+must("Siswa Uji Satu" not in daftar and "UJI-001" not in daftar, "siswa ber-catatan absen hilang dari daftar setelah dihapus")
+s, url, rekap_admin = req(admin, "/rekap")
+must("Siswa Uji Satu" not in rekap_admin, "catatan absen siswa yang dihapus ikut hilang dari rekap")
 print("\nSEMUA UJI LULUS")
