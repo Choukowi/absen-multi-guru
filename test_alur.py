@@ -123,4 +123,92 @@ s, url, daftar = req(admin, "/admin/siswa")
 must("Siswa Uji Satu" not in daftar and "UJI-001" not in daftar, "siswa ber-catatan absen hilang dari daftar setelah dihapus")
 s, url, rekap_admin = req(admin, "/rekap")
 must("Siswa Uji Satu" not in rekap_admin, "catatan absen siswa yang dihapus ikut hilang dari rekap")
+
+# 8. Edit, hapus & nonaktifkan guru (admin)
+s, url, daftar_guru = req(admin, "/admin/guru")
+must("Edit" in daftar_guru and "Hapus" in daftar_guru, "daftar guru menampilkan tombol Edit dan Hapus")
+def guru_id_dari(htmltxt, username):
+    for chunk in htmltxt.split("<li>"):
+        if username in chunk:
+            m = re.search(r"/admin/guru/(\d+)/edit", chunk)
+            if m: return m.group(1)
+    return None
+guruuji_id = guru_id_dari(daftar_guru, "guruuji")
+must(guruuji_id, f"id guruuji terbaca dari daftar: {guruuji_id}")
+# buat guru kedua (belum punya sesi apa pun)
+req(admin, "/admin/guru", {"nama": "Guru Uji Dua", "username": "guruujidua", "password": "guruujidua123"})
+s, url, daftar_guru = req(admin, "/admin/guru")
+g2_id = guru_id_dari(daftar_guru, "guruujidua")
+must(g2_id, f"id guru kedua terbaca dari daftar: {g2_id}")
+# guru ber-riwayat (guruuji) -> teks konfirmasi Hapus-nya soal menonaktifkan, bukan menghapus
+chunk_uji = next((c for c in daftar_guru.split("<li>") if "guruuji" in c), "")
+must("dinonaktifkan" in chunk_uji, "konfirmasi Hapus guru ber-riwayat berisi kata 'dinonaktifkan'")
+chunk_dua = next((c for c in daftar_guru.split("<li>") if "guruujidua" in c), "")
+must("dihapus permanen" in chunk_dua, "konfirmasi Hapus guru tanpa riwayat berisi 'dihapus permanen'")
+# form edit terisi data awal + ada kolom password opsional
+s, url, form_edit = req(admin, f"/admin/guru/{g2_id}/edit")
+must("Guru Uji Dua" in form_edit and "guruujidua" in form_edit and "Password baru" in form_edit,
+     "form edit guru terisi data awal dan punya kolom Password baru opsional")
+# edit nama + username (password dikosongkan -> tidak berubah)
+req(admin, f"/admin/guru/{g2_id}/edit", {"nama": "Guru Uji Dua Revisi", "username": "guruujidua2", "password": ""})
+s, url, daftar_guru = req(admin, "/admin/guru")
+must("Guru Uji Dua Revisi" in daftar_guru and "guruujidua2" in daftar_guru, "hasil edit nama & username guru tampil di daftar")
+must("guruujidua<" not in daftar_guru and ">guruujidua<" not in daftar_guru, "username lama guru sudah tidak ada di daftar")
+# login pakai username baru + password lama (password tidak ikut berubah)
+g2 = client()
+s, url, body = req(g2, "/login", {"username": "guruujidua2", "password": "guruujidua123"})
+must("dashboard" in url, "guru kedua bisa login dengan username baru + password lama")
+# edit username ke username guru lain harus ditolak
+s, url, form_edit = req(admin, f"/admin/guru/{g2_id}/edit", {"nama": "Guru Uji Dua Revisi", "username": "guruuji", "password": ""})
+must("Username sudah dipakai." in form_edit, "edit username ke username guru lain ditolak dengan pesan")
+s, url, daftar_guru = req(admin, "/admin/guru")
+must("guruujidua2" in daftar_guru, "username guru tidak berubah setelah edit yang ditolak")
+# ganti password lewat edit -> password lama gagal, password baru berhasil
+req(admin, f"/admin/guru/{g2_id}/edit", {"nama": "Guru Uji Dua Revisi", "username": "guruujidua2", "password": "passwordbaru123"})
+g2lama = client()
+s, url, body = req(g2lama, "/login", {"username": "guruujidua2", "password": "guruujidua123"})
+must("dashboard" not in url, "login dengan password lama gagal setelah password diganti")
+g2baru = client()
+s, url, body = req(g2baru, "/login", {"username": "guruujidua2", "password": "passwordbaru123"})
+must("dashboard" in url, "login dengan password baru berhasil")
+# id guru tidak ada -> diarahkan kembali dengan pesan
+s, url, daftar404 = req(admin, "/admin/guru/999999/edit")
+must("Guru tidak ditemukan." in daftar404, "edit id guru tidak ada diarahkan ke daftar dengan pesan")
+s, url, hasil404 = req(admin, "/admin/guru/999999/hapus", {})
+must("Guru tidak ditemukan." in hasil404, "hapus id guru tidak ada diarahkan ke daftar dengan pesan")
+# hapus guru kedua (belum punya sesi) -> terhapus permanen, login gagal
+s, url, hasil_hapus = req(admin, f"/admin/guru/{g2_id}/hapus", {})
+must("Guru dihapus." in hasil_hapus, "hapus guru tanpa riwayat berhasil dengan pesan 'Guru dihapus.'")
+s, url, daftar_guru = req(admin, "/admin/guru")
+must("guruujidua2" not in daftar_guru and "Guru Uji Dua Revisi" not in daftar_guru, "guru terhapus hilang dari daftar")
+g2mati = client()
+s, url, body = req(g2mati, "/login", {"username": "guruujidua2", "password": "passwordbaru123"})
+must("dashboard" not in url, "login guru yang sudah dihapus gagal")
+# hapus guruuji (SUDAH punya sesi) -> dinonaktifkan, BUKAN dihapus; riwayat tetap ada
+s, url, hasil_nonaktif = req(admin, f"/admin/guru/{guruuji_id}/hapus", {})
+must("Guru dinonaktifkan karena sudah punya riwayat sesi absen." in hasil_nonaktif,
+     "hapus guru ber-riwayat menghasilkan pesan dinonaktifkan")
+s, url, daftar_guru = req(admin, "/admin/guru")
+must("Guru Uji" in daftar_guru and "(nonaktif)" in daftar_guru and "Aktifkan" in daftar_guru,
+     "guru ber-riwayat tetap di daftar sebagai (nonaktif) dengan tombol Aktifkan")
+s, url, rekap_admin = req(admin, "/rekap")
+must("UJI-Matematika" in rekap_admin and "Guru Uji" in rekap_admin,
+     "sesi & rekap guru yang dinonaktifkan tetap terlihat oleh admin")
+# guru nonaktif hilang dari dropdown penugasan
+s, url, form_penugasan = req(admin, "/admin/penugasan")
+m = re.search(r'<select name="user_id">(.*?)</select>', form_penugasan, re.S)
+must(m is not None and "Guru Uji" not in m.group(1), "guru nonaktif tidak muncul di dropdown penugasan")
+# login guruuji saat nonaktif ditolak dengan pesan jelas
+g_mati = client()
+s, url, body = req(g_mati, "/login", {"username": "guruuji", "password": "guruuji123"})
+must("dashboard" not in url and "Akun ini sudah dinonaktifkan." in body,
+     "login guru nonaktif ditolak dengan pesan 'Akun ini sudah dinonaktifkan.'")
+# aktifkan lagi -> login kembali bisa
+s, url, hasil_aktif = req(admin, f"/admin/guru/{guruuji_id}/aktifkan", {})
+must("Guru diaktifkan kembali." in hasil_aktif, "aktifkan guru berhasil dengan pesan")
+s, url, daftar_guru = req(admin, "/admin/guru")
+must("(nonaktif)" not in daftar_guru, "tidak ada lagi guru (nonaktif) di daftar setelah diaktifkan")
+g_hidup = client()
+s, url, body = req(g_hidup, "/login", {"username": "guruuji", "password": "guruuji123"})
+must("dashboard" in url, "login guruuji berhasil lagi setelah diaktifkan")
 print("\nSEMUA UJI LULUS")

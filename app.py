@@ -277,6 +277,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.cetak(user, int(path.split("/")[2]), flash)
         if user["role"] == "admin":
             if path == "/admin/guru": return self.admin_guru(user, flash)
+            if path.startswith("/admin/guru/") and path.endswith("/edit"):
+                return self.admin_guru_edit(user, int(path.split("/")[3]), flash)
             if path == "/admin/kelas": return self.admin_kelas(user, flash)
             if path == "/admin/mapel": return self.admin_mapel(user, flash)
             if path == "/admin/siswa": return self.admin_siswa(user, qs, flash)
@@ -305,6 +307,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.redirect("/dashboard", "Password berhasil diganti.")
         if user["role"] == "admin":
             if path == "/admin/guru": return self.post_admin_guru(f)
+            if path.startswith("/admin/guru/") and path.endswith("/edit"):
+                return self.post_admin_guru_edit(int(path.split("/")[3]), f)
+            if path.startswith("/admin/guru/") and path.endswith("/hapus"):
+                return self.post_admin_guru_hapus(int(path.split("/")[3]))
+            if path.startswith("/admin/guru/") and path.endswith("/aktifkan"):
+                return self.post_admin_guru_aktifkan(int(path.split("/")[3]))
             if path == "/admin/kelas": return self.post_admin_kelas(f)
             if path == "/admin/mapel": return self.post_admin_mapel(f)
             if path == "/admin/siswa": return self.post_admin_siswa(f)
@@ -326,9 +334,15 @@ class Handler(BaseHTTPRequestHandler):
     def post_login(self):
         f = self.form()
         conn = db()
-        row = conn.execute("SELECT * FROM users WHERE username=? AND aktif=1",
+        row = conn.execute("SELECT * FROM users WHERE username=?",
                            (f.get("username", "").strip(),)).fetchone()
         conn.close()
+        if row and not row["aktif"]:
+            # Akun nonaktif tidak bisa masuk (query utama di bawah memfilter aktif=1);
+            # beri pesan yang jelas bila password-nya memang benar.
+            if verify_password(f.get("password", ""), row["password_hash"], row["salt"]):
+                return self.redirect("/login", "Akun ini sudah dinonaktifkan.")
+            return self.redirect("/login", "Username atau password salah.")
         if row and verify_password(f.get("password", ""), row["password_hash"], row["salt"]):
             token = secrets.token_urlsafe(32)
             LOGIN_SESSIONS[token] = row["id"]
@@ -370,10 +384,36 @@ class Handler(BaseHTTPRequestHandler):
     # -- admin: guru --------------------------------------------------------
     def admin_guru(self, user, flash):
         conn = db()
-        rows = conn.execute("SELECT * FROM users WHERE role='guru' ORDER BY nama").fetchall()
+        rows = conn.execute(
+            """SELECT u.*, (SELECT COUNT(*) FROM sessions s WHERE s.teacher_id=u.id) AS jml_sesi,
+                      (SELECT COUNT(*) FROM attendance a WHERE a.recorded_by=u.id) AS jml_catat
+               FROM users u WHERE u.role='guru' ORDER BY u.nama""").fetchall()
         conn.close()
-        items = "".join(f'<li>{esc(r["nama"])} &mdash; username: <code>{esc(r["username"])}</code></li>'
-                        for r in rows) or "<li>Belum ada guru.</li>"
+        items = ""
+        for r in rows:
+            nama_js = r["nama"].replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+            dasar = (f'<li>{esc(r["nama"])} &mdash; username: <code>{esc(r["username"])}</code> '
+                     f'&mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
+            if not r["aktif"]:
+                items += (dasar + '(nonaktif) '
+                          f'<form method="post" action="/admin/guru/{r["id"]}/aktifkan" class="inline">'
+                          f'<button type="submit">Aktifkan</button></form></li>')
+            elif r["jml_sesi"] or r["jml_catat"]:
+                # Punya riwayat absen: tombol Hapus akan menonaktifkan, bukan menghapus.
+                confirm_msg = (f"Nonaktifkan guru {nama_js}? Guru ini sudah punya riwayat sesi absen, "
+                               f"jadi akunnya akan dinonaktifkan (bukan dihapus) dan riwayat "
+                               f"absennya tetap tersimpan.")
+                items += (dasar +
+                          f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
+                          f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+                          f'<button type="submit">Hapus</button></form></li>')
+            else:
+                confirm_msg = f"Hapus guru {nama_js}? Akun guru ini akan dihapus permanen."
+                items += (dasar +
+                          f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
+                          f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+                          f'<button type="submit">Hapus</button></form></li>')
+        items = items or "<li>Belum ada guru.</li>"
         body = f"""<h2>Kelola Guru</h2><ul>{items}</ul>
         <h3>Tambah Guru</h3>
         <form method="post" action="/admin/guru">
@@ -393,6 +433,80 @@ class Handler(BaseHTTPRequestHandler):
             return self.redirect("/admin/guru", "Guru ditambahkan.")
         except sqlite3.IntegrityError:
             return self.redirect("/admin/guru", "Username sudah dipakai.")
+
+    def _get_guru(self, conn, gid):
+        return conn.execute("SELECT * FROM users WHERE id=? AND role='guru'", (gid,)).fetchone()
+
+    def admin_guru_edit(self, user, gid, flash):
+        conn = db()
+        g = self._get_guru(conn, gid)
+        conn.close()
+        if not g:
+            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+        body = f"""<h2>Edit Guru</h2>
+        <form method="post" action="/admin/guru/{g['id']}/edit">
+          <label>Nama <input name="nama" value="{esc(g['nama'])}" required></label>
+          <label>Username <input name="username" value="{esc(g['username'])}" required></label>
+          <label>Password baru (kosongkan jika tidak diganti)
+            <input name="password" type="password" minlength="8"></label>
+          <button type="submit">Simpan Perubahan</button></form>
+        <p><a href="/admin/guru">Kembali ke daftar guru</a></p>"""
+        return self.send_html(layout(user, "Edit Guru", body, flash))
+
+    def post_admin_guru_edit(self, gid, f):
+        conn = db()
+        g = self._get_guru(conn, gid)
+        if not g:
+            conn.close()
+            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+        try:
+            pw = f.get("password", "")
+            if pw:
+                ph, salt = hash_password(pw)
+                conn.execute("UPDATE users SET nama=?, username=?, password_hash=?, salt=? WHERE id=?",
+                             (f["nama"].strip(), f["username"].strip(), ph, salt, gid))
+            else:
+                conn.execute("UPDATE users SET nama=?, username=? WHERE id=?",
+                             (f["nama"].strip(), f["username"].strip(), gid))
+            conn.commit(); conn.close()
+            return self.redirect("/admin/guru", "Guru diperbarui.")
+        except sqlite3.IntegrityError:
+            conn.close()
+            return self.redirect(f"/admin/guru/{gid}/edit", "Username sudah dipakai.")
+
+    def post_admin_guru_hapus(self, gid):
+        conn = db()
+        g = self._get_guru(conn, gid)
+        if not g:
+            conn.close()
+            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+        jml_sesi = conn.execute("SELECT COUNT(*) c FROM sessions WHERE teacher_id=?",
+                                (gid,)).fetchone()["c"]
+        jml_catat = conn.execute("SELECT COUNT(*) c FROM attendance WHERE recorded_by=?",
+                                 (gid,)).fetchone()["c"]
+        if jml_sesi or jml_catat:
+            # Sudah punya riwayat absen: jangan hapus, cukup nonaktifkan agar
+            # sesi dan catatan absennya tetap tersimpan.
+            conn.execute("UPDATE users SET aktif=0 WHERE id=?", (gid,))
+            conn.commit(); conn.close()
+            return self.redirect("/admin/guru",
+                                 "Guru dinonaktifkan karena sudah punya riwayat sesi absen. "
+                                 "Riwayat absennya tetap tersimpan.")
+        # Belum punya riwayat: hapus permanen (penugasan dulu, baru akunnya, satu transaksi).
+        conn.execute("DELETE FROM assignments WHERE user_id=?", (gid,))
+        conn.execute("DELETE FROM users WHERE id=?", (gid,))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/guru", "Guru dihapus.")
+
+    def post_admin_guru_aktifkan(self, gid):
+        conn = db()
+        g = self._get_guru(conn, gid)
+        if not g:
+            conn.close()
+            return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+        conn.execute("UPDATE users SET aktif=1 WHERE id=?", (gid,))
+        conn.commit(); conn.close()
+        return self.redirect("/admin/guru", "Guru diaktifkan kembali.")
 
     # -- admin: kelas & mapel (pola sama) -----------------------------------
     def _simple_list(self, user, flash, table, title, action):
@@ -517,7 +631,7 @@ class Handler(BaseHTTPRequestHandler):
     # -- admin: penugasan -----------------------------------------------------
     def admin_penugasan(self, user, flash):
         conn = db()
-        guru = conn.execute("SELECT * FROM users WHERE role='guru' ORDER BY nama").fetchall()
+        guru = conn.execute("SELECT * FROM users WHERE role='guru' AND aktif=1 ORDER BY nama").fetchall()
         kelas = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
         mapel = conn.execute("SELECT * FROM subjects ORDER BY nama").fetchall()
         rows = conn.execute(
