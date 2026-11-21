@@ -366,6 +366,12 @@ table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
 .auth-card h2 { margin-top: 4px; }
 .auth-foot { color: var(--muted); text-align: center; font-size: .88rem; margin: 0; }
 
+/* Label lisensi terkunci (env ABSEN_LISENSI): baris kecil redup di
+   bawah kartu login & di dalam footer. Hanya dirender server bila
+   env diisi; tidak terpengaruh tema pastel (di luar scope tema). */
+.lisensi { color: var(--muted); text-align: center; font-size: .82rem; margin: 0; }
+footer .lisensi { margin-top: 4px; }
+
 /* ---------- Mobile (<900px): topbar + bottom nav ---------- */
 @media (max-width: 899px) {
   .sidebar { display: none; }
