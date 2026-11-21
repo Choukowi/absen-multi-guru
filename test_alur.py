@@ -903,6 +903,146 @@ s, url, hal = req(anon, "/cari?q=Cari")
 must(urllib.parse.urlparse(url).path == "/login",
      "anonim membuka /cari -> diarahkan ke /login")
 
+# ===========================================================================
+# Fase N — Dashboard: penghitung HARI INI. "Siswa Hadir" mencakup Hadir +
+# Terlambat (yang terlambat tetap dihitung hadir), "Guru Hadir" juga begitu,
+# dan "Siswa Belum Scan" = total siswa - siswa yang sudah punya catatan apa
+# pun hari ini (scan / manual Sakit-Izin / Alpa otomatis), turun 1 per scan.
+# Simulasi Rabu 2026-11-18: tanggal baru yang belum punya catatan sama
+# sekali, jadi angka awal pasti 0 / total siswa. Delta dihitung dari angka
+# awal yang dibaca dari dashboard sendiri agar tahan data fase sebelumnya.
+# ===========================================================================
+TGL_N = "2026-11-18"
+
+
+def angka_kartu(dash_html, label):
+    m = re.search(r"<b>(\d+)</b><small>" + re.escape(label) + r"</small>", dash_html)
+    return int(m.group(1)) if m else None
+
+
+start_server()  # waktu nyata: siapkan data khas fase ini lewat alur admin
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Dash"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kd = opt_val(form_siswa, "UJI-Kelas-Dash")
+must(kd, "kelas UJI-Kelas-Dash dibuat untuk uji dashboard")
+for i in range(1, 6):
+    req(admin, "/admin/siswa",
+        {"nama": f"Siswa Dash {i}", "kode": f"UJI-H0{i}", "class_id": kd})
+req(admin, "/admin/guru", {"nama": "Guru Dash Satu", "username": "gurudash1",
+                           "password": "gurudash123", "mapel": "UJI-DashMapel"})
+req(admin, "/admin/guru", {"nama": "Guru Dash Dua", "username": "gurudash2",
+                           "password": "gurudash123", "mapel": "UJI-DashMapel"})
+s, url, daftar_siswa_n = req(admin, "/admin/siswa")
+d3_id = id_dari_daftar(daftar_siswa_n, "/admin/siswa", "UJI-H03")
+must(d3_id, "id siswa UJI-H03 terbaca untuk input Sakit manual")
+s, url, daftar_guru_n = req(admin, "/admin/guru")
+chunk_gd = next((c for c in daftar_guru_n.split("<li>") if "gurudash1" in c), "")
+m_qr_n = re.search(r"kode QR: <code>(G\d+)</code>", chunk_gd)
+must(m_qr_n is not None, "kode QR Guru Dash Satu terbaca")
+gd1_qr = m_qr_n.group(1)
+total_siswa_n = dbq("SELECT COUNT(*) FROM students")
+must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=?", (TGL_N,)) == 0,
+     "tanggal uji dashboard 2026-11-18 belum punya catatan kehadiran apa pun")
+
+# --- Rabu 06:30, sebelum scan apa pun ---
+start_server(f"{TGL_N}T06:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+sh0 = angka_kartu(dash, "Siswa Hadir")
+gh0 = angka_kartu(dash, "Guru Hadir")
+bs0 = angka_kartu(dash, "Siswa Belum Scan")
+must(sh0 == 0, f"dashboard 06:30 sebelum scan: Siswa Hadir = 0 (terbaca {sh0})")
+must(gh0 == 0, f"dashboard 06:30 sebelum scan: Guru Hadir = 0 (terbaca {gh0})")
+must(bs0 == total_siswa_n,
+     f"dashboard 06:30 sebelum scan: Siswa Belum Scan = total siswa "
+     f"{total_siswa_n} (terbaca {bs0})")
+# scan siswa 1 pukul 06:30 -> Hadir
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-H01"})
+must("Siswa Dash 1" in hasil and "Hadir" in hasil,
+     "scan Siswa Dash 1 pukul 06:30 -> Hadir")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Hadir") == sh0 + 1,
+     "setelah 1 scan Hadir: Siswa Hadir naik 1")
+must(angka_kartu(dash, "Siswa Belum Scan") == bs0 - 1,
+     "setelah 1 scan Hadir: Siswa Belum Scan turun 1")
+
+# --- Rabu 07:30: scan Terlambat tetap dihitung Hadir ---
+start_server(f"{TGL_N}T07:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-H02"})
+must("Siswa Dash 2" in hasil and "Terlambat" in hasil,
+     "scan Siswa Dash 2 pukul 07:30 -> Terlambat")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Hadir") == sh0 + 2,
+     "scan Terlambat tetap dihitung hadir: Siswa Hadir naik lagi 1")
+must(angka_kartu(dash, "Siswa Terlambat") == 1,
+     "kartu info Siswa Terlambat tetap menunjukkan 1")
+must(angka_kartu(dash, "Siswa Belum Scan") == bs0 - 2,
+     "setelah scan Terlambat: Siswa Belum Scan turun lagi 1")
+# guru scan Terlambat -> Guru Hadir naik (terlambat dihitung hadir)
+s, url, hasil = req(admin, "/api/scan", {"kode": gd1_qr})
+must("Guru Dash Satu" in hasil and "Terlambat" in hasil,
+     "scan Guru Dash Satu pukul 07:30 -> Terlambat")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Guru Hadir") == gh0 + 1,
+     "guru Terlambat dihitung hadir: Guru Hadir naik 1")
+# Sakit manual: Siswa Hadir TIDAK berubah, Siswa Belum Scan turun 1
+s, url, hasil = req(admin, "/kehadiran/edit",
+                    {"tanggal": TGL_N, "tipe": "siswa", "id": d3_id,
+                     "status": "Sakit", "jam": ""})
+must("ditandai Sakit" in hasil, "input manual Sakit Siswa Dash 3 tersimpan")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Hadir") == sh0 + 2,
+     "Sakit manual: Siswa Hadir tidak berubah")
+must(angka_kartu(dash, "Siswa Belum Scan") == bs0 - 3,
+     "Sakit manual: Siswa Belum Scan turun 1 (sudah ada catatan hari ini)")
+
+# ===========================================================================
+# Fase O — Toggle "mata" password: layout kini menyertakan /static/app.js
+# di SEMUA halaman (varian login maupun shell yang sudah masuk), jadi tiap
+# kolom password — login, Ganti Password, Tambah Guru, Edit Guru — otomatis
+# mendapat tombol mata dari app.js. Isi app.js/style.css memuat logika &
+# gaya .pw-toggle/.pw-wrap; halaman scan tetap memuat app.js tepat 1x.
+# ===========================================================================
+start_server()
+s, url, login_html = req(client(), "/login")
+must('type="password"' in login_html, "halaman login punya kolom password")
+must('<script src="/static/app.js"></script>' in login_html,
+     "halaman login memuat /static/app.js (sumber toggle mata password)")
+admin, url, _ = login("admin", "admin123")
+s, url, gp_html = req(admin, "/ganti-password")
+must('type="password"' in gp_html, "halaman Ganti Password punya kolom password")
+must('<script src="/static/app.js"></script>' in gp_html,
+     "halaman Ganti Password memuat /static/app.js")
+s, url, guru_html = req(admin, "/admin/guru")
+must('type="password"' in guru_html, "form Tambah Guru punya kolom password awal")
+must('<script src="/static/app.js"></script>' in guru_html,
+     "halaman Kelola Guru memuat /static/app.js")
+gid_o = id_dari_daftar(guru_html, "/admin/guru", "gurudash1")
+must(gid_o, "id guru terbaca untuk uji form Edit Guru")
+s, url, edit_guru_html = req(admin, f"/admin/guru/{gid_o}/edit")
+must('type="password"' in edit_guru_html,
+     "form Edit Guru punya kolom password baru")
+must('<script src="/static/app.js"></script>' in edit_guru_html,
+     "halaman Edit Guru memuat /static/app.js")
+s, headers, js_bytes = req_bytes(admin, "/static/app.js")
+js = js_bytes.decode("utf-8", "replace")
+must("pw-toggle" in js and "pw-wrap" in js,
+     "app.js memuat logika toggle mata password (pw-toggle/pw-wrap)")
+must("input.type = terlihat ? 'password' : 'text'" in js,
+     "app.js mengganti type password <-> text saat tombol mata diklik")
+must("Tampilkan password" in js and "Sembunyikan password" in js,
+     "app.js mengganti aria-label Tampilkan/Sembunyikan password")
+s, headers, css_bytes = req_bytes(admin, "/static/style.css")
+css = css_bytes.decode("utf-8", "replace")
+must(".pw-toggle" in css and ".pw-wrap" in css,
+     "style.css memuat gaya .pw-toggle dan .pw-wrap")
+s, url, scan_html = req(admin, "/scan-gerbang")
+must(scan_html.count("/static/app.js") == 1,
+     "halaman Scan Gerbang memuat app.js tepat satu kali (dari layout)")
+must("jsQR" in scan_html, "halaman Scan Gerbang tetap memuat jsQR dari CDN")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)

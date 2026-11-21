@@ -350,7 +350,7 @@ def layout(user, title, body, flash="", aktif=""):
 <span class="brand-name">{esc(nama_app)}</span></div>
 {flash_html}{body}</div>
 <p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
-</div></body></html>"""
+</div><script src="/static/app.js"></script></body></html>"""
     items = nav_items(user)
     sidenav = "".join(
         f'<a class="nav-item{" aktif" if k == aktif else ""}" href="{href}">'
@@ -386,7 +386,7 @@ def layout(user, title, body, flash="", aktif=""):
 <footer><small>&copy; {tahun} {esc(nama_app)} &bull; Absensi gerbang sekolah &bull; QR Code biasa (bukan QRIS pembayaran)</small></footer>
 </div>
 <nav class="bottomnav">{bottomnav}</nav>
-</div></body></html>"""
+</div><script src="/static/app.js"></script></body></html>"""
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +663,8 @@ class Handler(BaseHTTPRequestHandler):
             return (f'<div class="stat-card"><span class="stat-ic {warna}">{icon(ic)}</span>'
                     f'<span class="stat-txt"><b>{angka}</b><small>{esc(label)}</small></span></div>')
         cards = "".join([
-            stat("check", "hijau", hitung[("siswa", "Hadir")], "Siswa Hadir"),
+            stat("check", "hijau", hitung[("siswa", "Hadir")] + hitung[("siswa", "Terlambat")],
+                 "Siswa Hadir"),
             stat("clock", "kuning", hitung[("siswa", "Terlambat")], "Siswa Terlambat"),
             stat("users", "biru", hitung[("siswa", "Sakit")] + hitung[("siswa", "Izin")],
                  "Siswa Sakit/Izin"),
@@ -757,8 +758,7 @@ class Handler(BaseHTTPRequestHandler):
         </section>
         <section class="card"><h3>Sudah Scan Hari Ini (<span id="jumlahDatang">{jumlah_datang}</span>)</h3>
         <ul class="arrivals" id="daftarDatang">{items}</ul></section>
-        <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-        <script src="/static/app.js"></script>"""
+        <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>"""
         return self.send_html(layout(user, "Scan Gerbang", body, flash, aktif="scan"))
 
     def post_scan(self, user, f):
