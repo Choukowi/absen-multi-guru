@@ -755,6 +755,75 @@ must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal='2026-11-17' "
          "AND ref_type='siswa'") == 2,
      "dua scan (ajax + non-ajax) tercatat sebagai kehadiran 2026-11-17")
 
+# ===========================================================================
+# Fase K — Detail kelas: klik nama kelas di Kelola Kelas -> daftar siswa
+# kelas itu (nama + NIS), tambah-cepat, keadaan kosong, hak akses
+# ===========================================================================
+start_server()
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Detail"})
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Lain"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kd = opt_val(form_siswa, "UJI-Kelas-Detail")
+kl = opt_val(form_siswa, "UJI-Kelas-Lain")
+must(kd and kl, f"id kelas detail/lain terbaca: {kd}, {kl}")
+req(admin, "/admin/siswa", {"nama": "Siswa Detail Satu", "kode": "UJI-D01", "class_id": kd})
+req(admin, "/admin/siswa", {"nama": "Siswa Detail Dua", "kode": "UJI-D02", "class_id": kd})
+req(admin, "/admin/siswa", {"nama": "Siswa Lain Kelas", "kode": "UJI-L01", "class_id": kl})
+# daftar kelas: jumlah siswa + tautan detail pada baris kelas yang benar
+s, url, daftar_kelas = req(admin, "/admin/kelas")
+chunk_d = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Detail" in c), "")
+chunk_l = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Lain" in c), "")
+must("2 siswa" in chunk_d and f'href="/admin/kelas/{kd}"' in chunk_d,
+     "daftar kelas: UJI-Kelas-Detail tampil '2 siswa' + tautan ke detailnya")
+must("1 siswa" in chunk_l and f'href="/admin/kelas/{kl}"' in chunk_l,
+     "daftar kelas: UJI-Kelas-Lain tampil '1 siswa' + tautan ke detailnya")
+# halaman detail: hanya siswa kelas itu sendiri, lengkap nama + NIS
+s, url, detail = req(admin, f"/admin/kelas/{kd}")
+must("Kelas UJI-Kelas-Detail" in detail and "2 siswa" in detail,
+     "detail kelas: judul memuat nama kelas + jumlah siswanya")
+must("Siswa Detail Satu" in detail and "UJI-D01" in detail
+     and "Siswa Detail Dua" in detail and "UJI-D02" in detail,
+     "detail kelas: memuat nama + NIS kedua siswa kelas itu")
+must("Siswa Lain Kelas" not in detail and "UJI-L01" not in detail,
+     "detail kelas: TIDAK memuat siswa kelas lain")
+must('action="/admin/siswa"' in detail
+     and f'name="class_id" value="{kd}"' in detail,
+     "detail kelas: formulir Tambah Siswa dengan kelas sudah terpilih (hidden)")
+must("Kembali ke daftar kelas" in detail,
+     "detail kelas: ada tautan 'Kembali ke daftar kelas'")
+# tambah-cepat dari halaman detail -> siswa tampil & hitungan naik
+req(admin, "/admin/siswa", {"nama": "Siswa Detail Tiga", "kode": "UJI-D03", "class_id": kd})
+s, url, detail = req(admin, f"/admin/kelas/{kd}")
+must("Siswa Detail Tiga" in detail and "UJI-D03" in detail and "3 siswa" in detail,
+     "tambah-cepat: siswa baru tampil di detail, jumlah naik jadi 3 siswa")
+s, url, daftar_kelas = req(admin, "/admin/kelas")
+chunk_d = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Detail" in c), "")
+must("3 siswa" in chunk_d, "daftar kelas: jumlah UJI-Kelas-Detail ikut naik jadi 3 siswa")
+# kelas kosong: pesan keadaan kosong + hitungan 0
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Hampa"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kh = opt_val(form_siswa, "UJI-Kelas-Hampa")
+must(kh, "kelas hampa dibuat")
+s, url, detail_kosong = req(admin, f"/admin/kelas/{kh}")
+must("Belum ada siswa di kelas ini." in detail_kosong and "0 siswa" in detail_kosong,
+     "detail kelas kosong: pesan 'Belum ada siswa di kelas ini.' + judul '0 siswa'")
+s, url, daftar_kelas = req(admin, "/admin/kelas")
+chunk_h = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Hampa" in c), "")
+must("0 siswa" in chunk_h, "daftar kelas: kelas kosong tampil '0 siswa'")
+# guru tidak boleh membuka detail kelas -> 404
+guru, url, _ = login("guruuji", "guruuji123")
+try:
+    req(guru, f"/admin/kelas/{kd}")
+    must(False, "guru membuka detail kelas harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "guru membuka detail kelas -> 404")
+# id kelas tidak dikenal -> kembali ke daftar + pesan
+s, url, hasil = req(admin, "/admin/kelas/99999")
+must("Data tidak ditemukan." in hasil
+     and urllib.parse.urlparse(url).path == "/admin/kelas",
+     "detail id tak dikenal -> diarahkan ke daftar kelas + 'Data tidak ditemukan.'")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)

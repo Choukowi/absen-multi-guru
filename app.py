@@ -538,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/kelas": return self.admin_kelas(user, flash)
             if path.startswith("/admin/kelas/") and path.endswith("/edit"):
                 return self.admin_kelas_edit(user, int(path.split("/")[3]), flash)
+            if path.startswith("/admin/kelas/") and path.split("/")[3].isdigit():
+                return self.admin_kelas_detail(user, int(path.split("/")[3]), flash)
             if path == "/admin/siswa": return self.admin_siswa(user, qs, flash)
             if path.startswith("/admin/siswa/") and path.endswith("/edit"):
                 return self.admin_siswa_edit(user, int(path.split("/")[3]), flash)
@@ -1604,8 +1606,29 @@ def _simple_list(self, user, flash, table, title, action, label, aktif_key):
 
 
 def _admin_kelas(self, user, flash):
-    return self._simple_list(user, flash, "classes", "Kelola Kelas",
-                             "/admin/kelas", "Kelas", "kelas")
+    conn = db()
+    rows = conn.execute(
+        """SELECT c.*, (SELECT COUNT(*) FROM students s WHERE s.class_id=c.id) AS jml
+           FROM classes c ORDER BY c.nama""").fetchall()
+    conn.close()
+    items = ""
+    for r in rows:
+        confirm_msg = f"Hapus kelas {js_str(r['nama'])}?"
+        items += (
+            f'<li><b><a href="/admin/kelas/{r["id"]}">{esc(r["nama"])}</a></b> '
+            f'&mdash; {r["jml"]} siswa '
+            f'&mdash; <a href="/admin/kelas/{r["id"]}/edit">Edit</a> '
+            f'<form method="post" action="/admin/kelas/{r["id"]}/hapus" class="inline" '
+            f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+    items = items or '<li class="muted">Belum ada data.</li>'
+    body = f"""<h2>Kelola Kelas</h2>
+    <div class="card"><ul class="plain-list">{items}</ul></div>
+    <div class="card form-card"><h3>Tambah Kelas</h3>
+    <form method="post" action="/admin/kelas">
+      <label>Nama baru <input name="nama" required></label>
+      <button type="submit" class="btn btn-primary">Tambah</button></form></div>"""
+    return self.send_html(layout(user, "Kelola Kelas", body, flash, aktif="kelas"))
 
 
 def _post_simple(self, table, f, back):
@@ -1687,6 +1710,43 @@ def _post_admin_kelas_hapus(self, kid):
             "Kelas tidak bisa dihapus karena masih dipakai data lain.")
     conn.close()
     return self.redirect("/admin/kelas", "Kelas dihapus.")
+
+
+def _admin_kelas_detail(self, user, kid, flash):
+    conn = db()
+    kelas = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
+    if not kelas:
+        conn.close()
+        return self.redirect("/admin/kelas", "Data tidak ditemukan.")
+    rows = conn.execute(
+        "SELECT * FROM students WHERE class_id=? ORDER BY nama", (kid,)).fetchall()
+    conn.close()
+    items = ""
+    for r in rows:
+        confirm_msg = (f"Hapus siswa {js_str(r['nama'])}? "
+                       "Catatan kehadirannya juga akan terhapus.")
+        items += (
+            f'<li><b>{esc(r["nama"])}</b> &mdash; NIS: <code>{esc(r["kode"])}</code> '
+            f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
+            f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
+            f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
+            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+    if items:
+        daftar = f'<div class="card"><ol class="plain-list">{items}</ol></div>'
+    else:
+        daftar = ('<div class="card"><p class="muted">'
+                  'Belum ada siswa di kelas ini.</p></div>')
+    body = f"""<h2>Kelas {esc(kelas["nama"])} &mdash; {len(rows)} siswa</h2>
+    {daftar}
+    <div class="card form-card"><h3>Tambah Siswa</h3>
+    <form method="post" action="/admin/siswa">
+      <label>Nama <input name="nama" required></label>
+      <label>NIS <input name="kode" required></label>
+      <input type="hidden" name="class_id" value="{kelas['id']}">
+      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>
+    <p><a href="/admin/kelas">Kembali ke daftar kelas</a></p>"""
+    return self.send_html(layout(user, f"Kelas {kelas['nama']}", body, flash,
+                                 aktif="kelas"))
 
 
 # -- admin: siswa --------------------------------------------------------------
@@ -2136,6 +2196,7 @@ Handler.admin_kelas_edit = _admin_kelas_edit
 Handler._post_simple_edit = _post_simple_edit
 Handler.post_admin_kelas_edit = _post_admin_kelas_edit
 Handler.post_admin_kelas_hapus = _post_admin_kelas_hapus
+Handler.admin_kelas_detail = _admin_kelas_detail
 Handler.admin_siswa = _admin_siswa
 Handler.post_admin_siswa = _post_admin_siswa
 Handler.admin_siswa_edit = _admin_siswa_edit
