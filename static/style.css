@@ -223,6 +223,27 @@ ul.arrivals .jam { margin-left: auto; font-variant-numeric: tabular-nums; font-w
   .laporan-grid { grid-template-columns: 1fr; }
 }
 
+/* ---------- Klaster ikon sekolah & kehadiran per kelas ---------- */
+.ikon-tema-cluster { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.ikon-tema { display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 10px; background: #eef1f8;
+  color: var(--muted); opacity: .8; }
+.ikon-tema svg { width: 19px; height: 19px; }
+.kelas-card h3 { display: flex; align-items: center; gap: 8px; margin-top: 0; }
+.kelas-card h3 svg { width: 21px; height: 21px; color: var(--indigo); flex: 0 0 auto; }
+.kelas-row { display: flex; align-items: center; gap: 12px; padding: 7px 0; }
+.kelas-nama { flex: 0 0 130px; font-weight: 650; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.kelas-bar { flex: 1; height: 12px; border-radius: 999px; background: #eef1f6;
+  overflow: hidden; }
+.kelas-bar > span { display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--indigo), var(--biru)); }
+.kelas-angka { flex: 0 0 52px; text-align: right; font-weight: 650;
+  font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .kelas-nama { flex-basis: 92px; }
+}
+
 /* ---------- Pil status ---------- */
 .pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
   font-size: .82rem; font-weight: 700; white-space: nowrap; }
@@ -320,6 +341,19 @@ table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
 .logo-preview img { width: 96px; height: 96px; object-fit: contain; padding: 6px;
   background: #fff; border-radius: 16px; border: 1px solid var(--garis);
   box-shadow: var(--shadow-sm); }
+/* Pilihan tema: kartu radio kecil dengan chip pratinjau gradasi tema. */
+.tema-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px; margin: 10px 0 6px; }
+.tema-pilih { display: flex; align-items: center; gap: 10px; margin: 0;
+  padding: 10px 12px; border: 1px solid var(--garis); border-radius: 14px;
+  cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease; }
+.tema-pilih:hover { border-color: #c3cad9; }
+.tema-pilih input[type="radio"] { display: inline-block; width: auto;
+  margin: 0; padding: 0; flex: 0 0 auto; }
+.tema-chip { width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto;
+  border: 1px solid rgba(16,24,40,.08); box-shadow: var(--shadow-sm); }
+.tema-nama { font-weight: 650; line-height: 1.25; min-width: 0; }
+.tema-nama small { display: block; color: var(--muted); font-weight: 500; }
 
 /* ---------- Halaman login ---------- */
 .auth-body { min-height: 100vh; }
@@ -384,3 +418,163 @@ table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
   .card { box-shadow: none; border: 0; padding: 0; }
   .kartu { box-shadow: none; }
 }
+
+/* ---------- Tema pastel (Pengaturan Tampilan -> Tema) ----------
+   SEMUA aturan tema terbatas pada body.tema-<slug>: tanpa tema aktif
+   tidak ada satu pun yang berlaku dan tampilan bawaan utuh persis.
+   Tiap tema mendefinisikan variabel --tema-*; aturan bersama di bawah
+   memakainya. Selama tema aktif, layout() tidak memuat penimpa
+   --warna-menu dan tidak memberi warna latar inline (kecuali bila
+   wallpaper terpasang), jadi palet tema yang berlaku. Teks selalu
+   gelap (--teks) di atas pastel agar tetap terbaca. */
+body.tema-pastel-pink { --tema-bg: #fdf2f5;
+  --tema-grad: linear-gradient(135deg, #f472a0, #fb923c);
+  --tema-aksen: #ec4899; --tema-aksen2: #f97316; --tema-ekstra: #a78bfa;
+  --tema-menu: #fff5f8; --tema-teks-aksen: #be185d;
+  --tema-tint1: #fce7f3; --tema-tint2: #ffedd5;
+  --tema-tint3: #ede9fe; --tema-tint4: #ffe4e6; }
+body.tema-mint { --tema-bg: #ecfdf5;
+  --tema-grad: linear-gradient(135deg, #34d399, #2dd4bf);
+  --tema-aksen: #0d9488; --tema-aksen2: #f59e0b;
+  --tema-menu: #f2fcf7; --tema-teks-aksen: #0f766e;
+  --tema-tint1: #d1fae5; --tema-tint2: #ccfbf1;
+  --tema-tint3: #fef3c7; --tema-tint4: #dcfce7; }
+body.tema-langit { --tema-bg: #eff6ff;
+  --tema-grad: linear-gradient(135deg, #60a5fa, #fdba74);
+  --tema-aksen: #3b82f6; --tema-aksen2: #fb923c;
+  --tema-menu: #f2f8ff; --tema-teks-aksen: #1d4ed8;
+  --tema-tint1: #dbeafe; --tema-tint2: #ffedd5;
+  --tema-tint3: #e0f2fe; --tema-tint4: #fef3c7; }
+body.tema-lilac { --tema-bg: #f5f3ff;
+  --tema-grad: linear-gradient(135deg, #a78bfa, #f472b6);
+  --tema-aksen: #8b5cf6; --tema-aksen2: #ec4899;
+  --tema-menu: #f8f6ff; --tema-teks-aksen: #7c3aed;
+  --tema-tint1: #ede9fe; --tema-tint2: #fce7f3;
+  --tema-tint3: #e0e7ff; --tema-tint4: #fae8ff; }
+body.tema-krem { --tema-bg: #fff7ed;
+  --tema-grad: linear-gradient(135deg, #fbbf24, #fb7185);
+  --tema-aksen: #ea580c; --tema-aksen2: #e11d48;
+  --tema-menu: #fffaf1; --tema-teks-aksen: #c2410c;
+  --tema-tint1: #fef3c7; --tema-tint2: #ffe4e6;
+  --tema-tint3: #ffedd5; --tema-tint4: #fef9c3; }
+
+body.tema-pastel-pink, body.tema-mint, body.tema-langit,
+body.tema-lilac, body.tema-krem { background-color: var(--tema-bg); }
+body.tema-pastel-pink .card, body.tema-mint .card, body.tema-langit .card,
+body.tema-lilac .card, body.tema-krem .card,
+body.tema-pastel-pink .auth-card, body.tema-mint .auth-card,
+body.tema-langit .auth-card, body.tema-lilac .auth-card,
+body.tema-krem .auth-card { border-radius: 22px; border-color: transparent;
+  box-shadow: 0 2px 6px rgba(76,60,120,.05), 0 16px 36px -18px rgba(76,60,120,.28); }
+body.tema-pastel-pink .btn-primary, body.tema-mint .btn-primary,
+body.tema-langit .btn-primary, body.tema-lilac .btn-primary,
+body.tema-krem .btn-primary { background: var(--tema-grad); }
+body.tema-pastel-pink .btn-primary:hover, body.tema-mint .btn-primary:hover,
+body.tema-langit .btn-primary:hover, body.tema-lilac .btn-primary:hover,
+body.tema-krem .btn-primary:hover { background: var(--tema-grad);
+  filter: brightness(1.06); }
+body.tema-pastel-pink .sidebar, body.tema-mint .sidebar,
+body.tema-langit .sidebar, body.tema-lilac .sidebar,
+body.tema-krem .sidebar { background: var(--tema-menu);
+  border-right-color: transparent; }
+body.tema-pastel-pink .topbar, body.tema-mint .topbar,
+body.tema-langit .topbar, body.tema-lilac .topbar,
+body.tema-krem .topbar { background: var(--tema-grad); }
+body.tema-pastel-pink .bottomnav, body.tema-mint .bottomnav,
+body.tema-langit .bottomnav, body.tema-lilac .bottomnav,
+body.tema-krem .bottomnav { background: var(--tema-menu);
+  border-top-color: transparent; }
+body.tema-pastel-pink .nav-item.aktif, body.tema-mint .nav-item.aktif,
+body.tema-langit .nav-item.aktif, body.tema-lilac .nav-item.aktif,
+body.tema-krem .nav-item.aktif { background: var(--tema-grad); color: #fff; }
+body.tema-pastel-pink .bnav-item.aktif, body.tema-mint .bnav-item.aktif,
+body.tema-langit .bnav-item.aktif, body.tema-lilac .bnav-item.aktif,
+body.tema-krem .bnav-item.aktif { background: var(--tema-tint1);
+  color: var(--tema-teks-aksen); }
+body.tema-pastel-pink .brand-mark, body.tema-mint .brand-mark,
+body.tema-langit .brand-mark, body.tema-lilac .brand-mark,
+body.tema-krem .brand-mark { background: var(--tema-grad); }
+body.tema-pastel-pink .brand-mark.has-logo, body.tema-mint .brand-mark.has-logo,
+body.tema-langit .brand-mark.has-logo, body.tema-lilac .brand-mark.has-logo,
+body.tema-krem .brand-mark.has-logo { background: #fff; }
+body.tema-pastel-pink .avatar, body.tema-mint .avatar,
+body.tema-langit .avatar, body.tema-lilac .avatar,
+body.tema-krem .avatar { background: var(--tema-grad); }
+body.tema-pastel-pink .quick-card, body.tema-mint .quick-card,
+body.tema-langit .quick-card, body.tema-lilac .quick-card,
+body.tema-krem .quick-card { background: var(--tema-grad); }
+body.tema-pastel-pink .stat-card, body.tema-mint .stat-card,
+body.tema-langit .stat-card, body.tema-lilac .stat-card,
+body.tema-krem .stat-card { border-radius: 22px; border-color: transparent; }
+body.tema-pastel-pink .stat-card:nth-child(4n+1), body.tema-mint .stat-card:nth-child(4n+1),
+body.tema-langit .stat-card:nth-child(4n+1), body.tema-lilac .stat-card:nth-child(4n+1),
+body.tema-krem .stat-card:nth-child(4n+1) { background: var(--tema-tint1); }
+body.tema-pastel-pink .stat-card:nth-child(4n+2), body.tema-mint .stat-card:nth-child(4n+2),
+body.tema-langit .stat-card:nth-child(4n+2), body.tema-lilac .stat-card:nth-child(4n+2),
+body.tema-krem .stat-card:nth-child(4n+2) { background: var(--tema-tint2); }
+body.tema-pastel-pink .stat-card:nth-child(4n+3), body.tema-mint .stat-card:nth-child(4n+3),
+body.tema-langit .stat-card:nth-child(4n+3), body.tema-lilac .stat-card:nth-child(4n+3),
+body.tema-krem .stat-card:nth-child(4n+3) { background: var(--tema-tint3); }
+body.tema-pastel-pink .stat-card:nth-child(4n), body.tema-mint .stat-card:nth-child(4n),
+body.tema-langit .stat-card:nth-child(4n), body.tema-lilac .stat-card:nth-child(4n),
+body.tema-krem .stat-card:nth-child(4n) { background: var(--tema-tint4); }
+body.tema-pastel-pink h2, body.tema-mint h2, body.tema-langit h2,
+body.tema-lilac h2, body.tema-krem h2 { color: var(--tema-teks-aksen); }
+body.tema-pastel-pink .ikon-tema, body.tema-mint .ikon-tema,
+body.tema-langit .ikon-tema, body.tema-lilac .ikon-tema,
+body.tema-krem .ikon-tema { opacity: 1; color: var(--tema-teks-aksen); }
+body.tema-pastel-pink .ikon-tema:nth-child(4n+1), body.tema-mint .ikon-tema:nth-child(4n+1),
+body.tema-langit .ikon-tema:nth-child(4n+1), body.tema-lilac .ikon-tema:nth-child(4n+1),
+body.tema-krem .ikon-tema:nth-child(4n+1) { background: var(--tema-tint1); }
+body.tema-pastel-pink .ikon-tema:nth-child(4n+2), body.tema-mint .ikon-tema:nth-child(4n+2),
+body.tema-langit .ikon-tema:nth-child(4n+2), body.tema-lilac .ikon-tema:nth-child(4n+2),
+body.tema-krem .ikon-tema:nth-child(4n+2) { background: var(--tema-tint2); }
+body.tema-pastel-pink .ikon-tema:nth-child(4n+3), body.tema-mint .ikon-tema:nth-child(4n+3),
+body.tema-langit .ikon-tema:nth-child(4n+3), body.tema-lilac .ikon-tema:nth-child(4n+3),
+body.tema-krem .ikon-tema:nth-child(4n+3) { background: var(--tema-tint3); }
+body.tema-pastel-pink .ikon-tema:nth-child(4n), body.tema-mint .ikon-tema:nth-child(4n),
+body.tema-langit .ikon-tema:nth-child(4n), body.tema-lilac .ikon-tema:nth-child(4n),
+body.tema-krem .ikon-tema:nth-child(4n) { background: var(--tema-tint4); }
+body.tema-pastel-pink .kelas-card h3 svg, body.tema-mint .kelas-card h3 svg,
+body.tema-langit .kelas-card h3 svg, body.tema-lilac .kelas-card h3 svg,
+body.tema-krem .kelas-card h3 svg { color: var(--tema-aksen); }
+body.tema-pastel-pink .kelas-bar > span, body.tema-mint .kelas-bar > span,
+body.tema-langit .kelas-bar > span, body.tema-lilac .kelas-bar > span,
+body.tema-krem .kelas-bar > span { background: var(--tema-grad); }
+body.tema-pastel-pink .userchip, body.tema-mint .userchip,
+body.tema-langit .userchip, body.tema-lilac .userchip,
+body.tema-krem .userchip { background: var(--tema-tint1);
+  border-color: transparent; }
+body.tema-pastel-pink .menu-card svg, body.tema-mint .menu-card svg,
+body.tema-langit .menu-card svg, body.tema-lilac .menu-card svg,
+body.tema-krem .menu-card svg { color: var(--tema-aksen); }
+body.tema-pastel-pink .laporan-klik, body.tema-mint .laporan-klik,
+body.tema-langit .laporan-klik, body.tema-lilac .laporan-klik,
+body.tema-krem .laporan-klik { color: var(--tema-teks-aksen); }
+body.tema-pastel-pink .laporan-card:hover, body.tema-mint .laporan-card:hover,
+body.tema-langit .laporan-card:hover, body.tema-lilac .laporan-card:hover,
+body.tema-krem .laporan-card:hover { border-color: var(--tema-aksen); }
+body.tema-pastel-pink table.tabel thead th, body.tema-mint table.tabel thead th,
+body.tema-langit table.tabel thead th, body.tema-lilac table.tabel thead th,
+body.tema-krem table.tabel thead th { background: var(--tema-tint1);
+  color: var(--teks); }
+body.tema-pastel-pink table.tabel tr.total-row td,
+body.tema-mint table.tabel tr.total-row td,
+body.tema-langit table.tabel tr.total-row td,
+body.tema-lilac table.tabel tr.total-row td,
+body.tema-krem table.tabel tr.total-row td { background: var(--tema-tint1); }
+body.tema-pastel-pink input:focus, body.tema-mint input:focus,
+body.tema-langit input:focus, body.tema-lilac input:focus,
+body.tema-krem input:focus, body.tema-pastel-pink select:focus,
+body.tema-mint select:focus, body.tema-langit select:focus,
+body.tema-lilac select:focus, body.tema-krem select:focus {
+  border-color: var(--tema-aksen); box-shadow: 0 0 0 3px var(--tema-tint1); }
+body.tema-pastel-pink .swatch input[type="radio"]:checked + span,
+body.tema-mint .swatch input[type="radio"]:checked + span,
+body.tema-langit .swatch input[type="radio"]:checked + span,
+body.tema-lilac .swatch input[type="radio"]:checked + span,
+body.tema-krem .swatch input[type="radio"]:checked + span {
+  border-color: var(--tema-aksen); box-shadow: 0 0 0 3px var(--tema-tint1); }
+body.tema-pastel-pink .kartu, body.tema-mint .kartu,
+body.tema-langit .kartu, body.tema-lilac .kartu,
+body.tema-krem .kartu { border-color: var(--tema-aksen); }
