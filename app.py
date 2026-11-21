@@ -10,9 +10,11 @@ Model absen:
   punya kartu QR (siswa: NIS; guru: kode QR guru, mis. G001).
 - Di gerbang, petugas scan QR lewat halaman /scan-gerbang (kamera + jsQR,
   atau ketik kode manual) -> POST /api/scan mencatat kehadiran HARI ITU:
-  scan <= 07:00 = Hadir, lewat 07:00 = Terlambat (jam dicatat persis).
+  scan <= 07:00 = Hadir, 07:01-08:59 = Terlambat (jam dicatat persis).
 - Yang sampai 09:00 belum scan otomatis menjadi Alpa (metode 'auto'),
   terisi saat tabel/dashboard dibuka. Sakit/Izin diisi manual.
+- Scan pukul 09:00 ke atas DITUTUP: orang yang belum punya catatan asli
+  hari itu ditolak ("Scan sudah ditutup") dan tetap tercatat Alpa.
 - Tabel mingguan Senin-Sabtu per kelas (siswa) dan untuk guru bisa dilihat
   semua pengguna yang login, dan diunduh sebagai Excel (.xlsx).
 
@@ -672,27 +674,54 @@ class Handler(BaseHTTPRequestHandler):
                FROM kehadiran k JOIN users u ON u.id=k.ref_id
                WHERE k.tanggal=? AND k.ref_type='guru' AND k.metode='scan'
                ORDER BY jam DESC LIMIT 10""", (tgl, tgl)).fetchall()
+        # Titik berganti pukul 09:00 (satu penanda bersama): panel bawah
+        # dashboard berganti dari daftar kedatangan terakhir menjadi
+        # Laporan Hari Ini (siapa Terlambat dan siapa Belum Scan), dan
+        # kartu statistik kembali ke nilai AWAL hari (lihat di bawah).
+        # pastikan_alpa di atas sudah berjalan, jadi daftar Belum Scan
+        # lengkap pada saat laporan dibuat.
+        sudah_sembilan = now.time() >= JAM_BATAS_ALPA
+        panel_laporan = self._panel_laporan(conn, tgl) if sudah_sembilan else None
         conn.close()
+        # Nilai kartu dari catatan hari ini (dipakai sebelum 09:00).
+        k_hadir_s = hitung[("siswa", "Hadir")] + hitung[("siswa", "Terlambat")]
+        k_telat_s = hitung[("siswa", "Terlambat")]
+        k_sakit_s = hitung[("siswa", "Sakit")] + hitung[("siswa", "Izin")]
+        k_alpa_s = hitung[("siswa", "Alpa")]
+        k_belum_s = belum
+        k_belum_g = belum_guru
+        k_hadir_g = hitung[("guru", "Hadir")] + hitung[("guru", "Terlambat")]
+        if sudah_sembilan:
+            # Keputusan user: mulai 09:00 kartu statistik di-reset
+            # TAMPILANNYA ke nilai awal hari — Hadir/Terlambat/Sakit-Izin/
+            # Alpa nol lagi, Belum Scan penuh lagi. Ini HANYA tampilan:
+            # catatan kehadiran tidak diubah sama sekali, tabel mingguan
+            # & Excel tetap menampilkan data asli, dan panel Laporan Hari
+            # Ini di bawah kartu menampilkan daftar sebenarnya.
+            k_hadir_s = k_telat_s = k_sakit_s = k_alpa_s = k_hadir_g = 0
+            k_belum_s = total_siswa
+            k_belum_g = total_guru
+
         def stat(ic, warna, angka, label):
             return (f'<div class="stat-card"><span class="stat-ic {warna}">{icon(ic)}</span>'
                     f'<span class="stat-txt"><b>{angka}</b><small>{esc(label)}</small></span></div>')
         cards = "".join([
-            stat("check", "hijau", hitung[("siswa", "Hadir")] + hitung[("siswa", "Terlambat")],
-                 "Siswa Hadir"),
-            stat("clock", "kuning", hitung[("siswa", "Terlambat")], "Siswa Terlambat"),
-            stat("users", "biru", hitung[("siswa", "Sakit")] + hitung[("siswa", "Izin")],
-                 "Siswa Sakit/Izin"),
-            stat("x", "merah", hitung[("siswa", "Alpa")], "Siswa Alpa"),
-            stat("scan", "ungu", belum, "Siswa Belum Scan"),
-            stat("scan", "indigo", belum_guru, "Guru Belum Scan"),
-            stat("badge", "indigo", hitung[("guru", "Hadir")] + hitung[("guru", "Terlambat")],
-                 "Guru Hadir"),
+            stat("check", "hijau", k_hadir_s, "Siswa Hadir"),
+            stat("clock", "kuning", k_telat_s, "Siswa Terlambat"),
+            stat("users", "biru", k_sakit_s, "Siswa Sakit/Izin"),
+            stat("x", "merah", k_alpa_s, "Siswa Alpa"),
+            stat("scan", "ungu", k_belum_s, "Siswa Belum Scan"),
+            stat("scan", "indigo", k_belum_g, "Guru Belum Scan"),
+            stat("badge", "indigo", k_hadir_g, "Guru Hadir"),
         ])
         items = "".join(
             f'<li><span class="pill p-{r["status"].lower()}">{esc(r["status"])}</span> '
             f'<b>{esc(r["nama"])}</b> <span class="muted">{esc(r["sub"] or "")}</span> '
             f'<span class="jam">{esc(r["jam"] or "")}</span></li>' for r in datang)
         items = items or '<li class="muted">Belum ada yang scan hari ini.</li>'
+        if panel_laporan is None:
+            panel_laporan = ('<section class="card"><h3>Kedatangan Terakhir Hari Ini</h3>\n'
+                             f'<ul class="arrivals">{items}</ul></section>')
         warn = ""
         if user["role"] == "admin" and verify_password("admin123", user["password_hash"], user["salt"]):
             warn = ('<div class="flash warn">PERINGATAN: akun admin ini masih memakai '
@@ -714,9 +743,63 @@ class Handler(BaseHTTPRequestHandler):
           <a class="quick-card" href="/tabel-siswa">{icon('users')}<span>Tabel Siswa</span></a>
           <a class="quick-card" href="/tabel-guru">{icon('badge')}<span>Tabel Guru</span></a>
         </div>
-        <section class="card"><h3>Kedatangan Terakhir Hari Ini</h3>
-        <ul class="arrivals">{items}</ul></section>"""
+        {panel_laporan}"""
         return self.send_html(layout(user, "Dashboard", body, flash, aktif="dashboard"))
+
+    def _panel_laporan(self, conn, tgl):
+        """Panel 'Laporan Hari Ini' untuk dashboard mulai pukul 09:00:
+        siapa yang Terlambat dan siapa yang Belum Scan hari ini, siswa
+        dan guru terpisah. 'Belum Scan' = hanya punya catatan Alpa
+        OTOMATIS (metode 'auto'), atau belum punya catatan sama sekali.
+        Dihitung langsung dari catatan hari ini (bukan snapshot). Scan
+        sesudah 09:00 sudah ditutup (keputusan user), jadi daftar ini
+        final: yang Belum Scan tetap Belum Scan. Yang Sakit/Izin
+        tidak muncul di daftar mana pun (sudah ada keterangan)."""
+        sis_telat = conn.execute(
+            """SELECT s.nama AS nama, c.nama AS sub, k.jam AS jam
+               FROM kehadiran k JOIN students s ON s.id=k.ref_id
+               JOIN classes c ON c.id=s.class_id
+               WHERE k.tanggal=? AND k.ref_type='siswa' AND k.status='Terlambat'
+               ORDER BY k.jam, s.nama""", (tgl,)).fetchall()
+        sis_belum = conn.execute(
+            """SELECT s.nama AS nama, c.nama AS sub
+               FROM students s JOIN classes c ON c.id=s.class_id
+               LEFT JOIN kehadiran k ON k.tanggal=? AND k.ref_type='siswa'
+                    AND k.ref_id=s.id
+               WHERE k.id IS NULL OR (k.metode='auto' AND k.status='Alpa')
+               ORDER BY c.nama, s.nama""", (tgl,)).fetchall()
+        gur_telat = conn.execute(
+            """SELECT u.nama AS nama, u.mapel AS sub, k.jam AS jam
+               FROM kehadiran k JOIN users u ON u.id=k.ref_id
+               WHERE k.tanggal=? AND k.ref_type='guru' AND k.status='Terlambat'
+                     AND u.role='guru' AND u.aktif=1
+               ORDER BY k.jam, u.nama""", (tgl,)).fetchall()
+        gur_belum = conn.execute(
+            """SELECT u.nama AS nama, u.mapel AS sub
+               FROM users u
+               LEFT JOIN kehadiran k ON k.tanggal=? AND k.ref_type='guru'
+                    AND k.ref_id=u.id
+               WHERE u.role='guru' AND u.aktif=1
+                     AND (k.id IS NULL OR (k.metode='auto' AND k.status='Alpa'))
+               ORDER BY u.nama""", (tgl,)).fetchall()
+
+        def bagian(judul, baris, pakai_jam):
+            isi = "".join(
+                f'<li><span class="no">{i}.</span> <b>{esc(r["nama"])}</b> '
+                f'<span class="muted">{esc(r["sub"] or "")}</span>'
+                + (f' <span class="jam">{esc(r["jam"] or "")}</span>' if pakai_jam else "")
+                + "</li>"
+                for i, r in enumerate(baris, 1))
+            isi = isi or '<li class="muted">Tidak ada.</li>'
+            return (f"<h4>{esc(judul)} ({len(baris)})</h4>"
+                    f'<ul class="plain-list">{isi}</ul>')
+
+        return ('<section class="card laporan"><h3>Laporan Hari Ini</h3>'
+                + bagian("Siswa Terlambat", sis_telat, True)
+                + bagian("Siswa Belum Scan", sis_belum, False)
+                + bagian("Guru Terlambat", gur_telat, True)
+                + bagian("Guru Belum Scan", gur_belum, False)
+                + "</section>")
 
     # -- scan gerbang -----------------------------------------------------------
     def _kedatangan_hari_ini(self, conn, tgl):
@@ -756,7 +839,7 @@ class Handler(BaseHTTPRequestHandler):
                           f'<div class="hasil-meta">{esc(hasil["pesan"])}</div></div>')
         body = f"""<h2>Scan Gerbang</h2>
         <p class="muted">{esc(NAMA_HARI[now.weekday()])}, {esc(fmt_tanggal(now.date()))} &bull;
-        pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; 07:00 = Hadir, lewat = Terlambat</p>
+        pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; 07:00 = Hadir, lewat = Terlambat, scan ditutup 09:00</p>
         <div id="hasilScan">{hasil_html}</div>
         <section class="card scan-card">
           <div class="scan-frame"><video id="cam" autoplay playsinline muted></video></div>
@@ -819,12 +902,24 @@ class Handler(BaseHTTPRequestHandler):
         else:
             ref_type, ref_id, nama = "guru", guru_row["id"], guru_row["nama"]
             sub = guru_row["mapel"] or ""
-        # Bila sudah lewat 09:00, Alpa otomatis mungkin sudah terisi untuk hari
-        # ini; scan tetap boleh menggantikannya (orangnya benar-benar datang).
+        # Bila sudah lewat 09:00, Alpa otomatis mungkin sudah terisi untuk
+        # hari ini; pastikan_alpa memastikan catatan itu ada sebelum dicek.
         pastikan_alpa(conn, tgl)
         ada = conn.execute(
             "SELECT * FROM kehadiran WHERE tanggal=? AND ref_type=? AND ref_id=?",
             (tgl, ref_type, ref_id)).fetchone()
+        # Keputusan user: scan pukul 09:00 ke atas TIDAK berlaku lagi.
+        # Orang yang belum punya catatan ASLI hari ini (belum ada catatan
+        # sama sekali, atau hanya Alpa otomatis) DITOLAK: tidak dibuat /
+        # diubah apa pun, Alpa otomatisnya tetap berdiri. Yang sudah
+        # tercatat asli (scan atau manual) tetap jatuh ke cabang-cabang
+        # "Sudah tercatat" di bawah seperti biasa.
+        if now.time() >= JAM_BATAS_ALPA and (ada is None or ada["metode"] == "auto"):
+            conn.close()
+            return {
+                "jenis": "error", "judul": "Scan sudah ditutup",
+                "pesan": f"Scan sudah ditutup (lewat jam 09.00). "
+                         f"{nama} tetap tercatat Alpa hari ini."}
         if ada:
             if ada["metode"] == "scan":
                 conn.close()
@@ -841,7 +936,9 @@ class Handler(BaseHTTPRequestHandler):
                 return {
                     "jenis": "info", "judul": "Sudah tercatat",
                     "pesan": f"{nama} sudah tercatat {ada['status']} (manual) hari ini."}
-            # metode 'auto' (Alpa otomatis) -> ganti dengan catatan scan di bawah.
+            # metode 'auto' (Alpa otomatis) sebelum 09:00 -> ganti dengan
+            # catatan scan di bawah. (Sesudah 09:00 kasus ini sudah
+            # ditolak oleh pemeriksaan "Scan sudah ditutup" di atas.)
             conn.execute("DELETE FROM kehadiran WHERE id=?", (ada["id"],))
         status = "Hadir" if now.time() <= JAM_BATAS_HADIR else "Terlambat"
         conn.execute(

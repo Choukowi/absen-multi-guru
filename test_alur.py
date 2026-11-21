@@ -416,7 +416,10 @@ s, url, hasil = req(admin, "/api/scan", {"kode": "TIDAK-ADA"})
 must("Kode tidak dikenal" in hasil, "kode asing ditolak 'Kode tidak dikenal'")
 
 # ===========================================================================
-# Fase D — Senin 09:30: Alpa otomatis; scan menggantikan Alpa otomatis
+# Fase D — Senin 09:30: Alpa otomatis; scan sesudah 09:00 DITOLAK
+# (keputusan user, dibuktikan lengkap di Fase T: scan pukul 09:00 ke atas
+# tidak berlaku lagi — dulu scan masih boleh menggantikan Alpa otomatis,
+# sekarang Alpa otomatisnya tetap berdiri)
 # ===========================================================================
 start_server("2026-11-16T09:30:00")
 admin, url, _ = login("admin", "admin123")
@@ -427,11 +430,11 @@ must(dbq("SELECT status || '/' || metode FROM kehadiran WHERE tanggal='2026-11-1
          "AND ref_type='siswa' AND ref_id=?", (D_id,)) == "Alpa/auto",
      "Alpa siswa D tercatat metode auto di DB")
 s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-004"})
-must("Terlambat" in hasil and "09:30" in hasil,
-     "scan siswa D pukul 09:30 tetap diterima -> Terlambat")
+must("Scan sudah ditutup" in hasil and "Siswa Uji D" in hasil,
+     "scan siswa D pukul 09:30 DITOLAK: 'Scan sudah ditutup'")
 must(dbq("SELECT status || '/' || metode FROM kehadiran WHERE tanggal='2026-11-16' "
-         "AND ref_type='siswa' AND ref_id=?", (D_id,)) == "Terlambat/scan",
-     "scan menggantikan Alpa otomatis siswa D")
+         "AND ref_type='siswa' AND ref_id=?", (D_id,)) == "Alpa/auto",
+     "scan yang ditolak tidak mengubah catatan: D tetap Alpa/auto")
 s, url, dash = req(admin, "/dashboard")
 must("Siswa Terlambat" in dash and "Guru Hadir" in dash,
      "dashboard menampilkan kartu statistik hari ini")
@@ -1052,6 +1055,8 @@ must("jsQR" in scan_html, "halaman Scan Gerbang tetap memuat jsQR dari CDN")
 # mereka tidak pernah scan, jadi tetap "belum scan" sepanjang hari, juga
 # sesudah 09:00 saat Alpa otomatis termaterialisasi. Kartu baru "Guru
 # Belum Scan" memakai prinsip yang sama terhadap total guru AKTIF.
+# (Tampilan kartu SESUDAH 09:00 kini mengikuti reset Fase T; rumus di
+# fase ini dibuktikan pada jam-jam sebelum 09:00 dan lewat hitungan DB.)
 # Simulasi Kamis 2026-11-19 (tanggal segar, belum dipakai fase lain);
 # delta dibaca dari dashboard sendiri agar tahan data fase sebelumnya.
 # ===========================================================================
@@ -1134,18 +1139,27 @@ must(bs_pre == bs_p0 - 2 and gb_pre == gb_p0 - 1,
      "angka Belum Scan pra-09:00 tercatat sebagai pembanding regresi")
 
 # --- Kamis 09:30: Alpa otomatis termaterialisasi untuk semua sisanya ---
+# CATATAN Fase T: sejak keputusan user di Fase T, mulai 09:00 kartu
+# statistik di-reset TAMPILANNYA ke nilai awal hari, jadi yang diperiksa
+# di sini bukan lagi angka hasil hitungan (itu berlaku sebelum 09:00,
+# dibuktikan blok-blok di atas dan Fase T): sesudah 09:00 Belum Scan
+# kembali PENUH — jelas TIDAK jatuh ke 0 karena Alpa otomatis — dan
+# Siswa Alpa tampil 0, sementara catatan Alpa otomatisnya sendiri tetap
+# termaterialisasi di DB (reset hanya tampilan kartu).
 start_server(f"{TGL_P}T09:30:00")
 admin, url, _ = login("admin", "admin123")
 s, url, dash = req(admin, "/dashboard")
-must(angka_kartu(dash, "Siswa Belum Scan") == bs_pre,
-     "sesudah 09:00: Siswa Belum Scan TIDAK berubah "
-     "(Alpa otomatis tidak menguranginya, tidak jatuh ke 0)")
-must(angka_kartu(dash, "Guru Belum Scan") == gb_pre,
-     "sesudah 09:00: Guru Belum Scan TIDAK berubah "
-     "(Alpa otomatis tidak menguranginya, tidak jatuh ke 0)")
-must(angka_kartu(dash, "Siswa Alpa") == total_siswa_p - 2,
-     "sesudah 09:00: kartu Siswa Alpa memuat Alpa otomatis untuk semua "
-     "siswa tanpa catatan scan/manual")
+must(angka_kartu(dash, "Siswa Belum Scan") == total_siswa_p,
+     "sesudah 09:00: kartu Siswa Belum Scan di-reset ke total siswa "
+     "(Alpa otomatis tidak membuatnya jatuh ke 0)")
+must(angka_kartu(dash, "Guru Belum Scan") == total_guru_p,
+     "sesudah 09:00: kartu Guru Belum Scan di-reset ke total guru aktif")
+must(angka_kartu(dash, "Siswa Alpa") == 0,
+     "sesudah 09:00: kartu Siswa Alpa di-reset tampilannya ke 0")
+must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
+         "AND status='Alpa' AND metode='auto'", (TGL_P,)) == total_siswa_p - 2,
+     "DB: Alpa otomatis tetap termaterialisasi untuk semua siswa tanpa "
+     "catatan scan/manual (reset kartu hanya tampilan)")
 
 # ===========================================================================
 # Fase Q — Kartu statistik dashboard SATU baris. style.css: .stat-grid
@@ -1251,6 +1265,336 @@ must(len(no_tab_guru) >= 2 and no_tab_guru[0] == 1 and no_tab_guru[1] == 2
      and sekuens_utuh(no_tab_guru),
      "tabel guru: sel No baris pertama '1', kedua '2', lalu berurutan "
      f"(terambil {len(no_tab_guru)} baris)")
+
+# ===========================================================================
+# Fase S — Panel dashboard berganti pukul 09:00: sebelum 09:00 tampil
+# "Kedatangan Terakhir Hari Ini"; mulai 09:00 panel itu HILANG, diganti
+# "Laporan Hari Ini" berisi 4 daftar bernomor — Siswa Terlambat, Siswa
+# Belum Scan (hanya Alpa otomatis / tanpa catatan sama sekali), Guru
+# Terlambat, Guru Belum Scan. Yang Sakit/Izin tidak muncul di daftar
+# mana pun. Daftar dihitung langsung dari catatan hari ini (bukan
+# snapshot). CATATAN: dulu scan susulan sesudah 09:00 memindahkan
+# orangnya dari Belum Scan ke Terlambat; keputusan user berikutnya
+# (Fase T) menutup scan pukul 09:00 ke atas, jadi segmen 09:05 di fase
+# ini kini membuktikan scan itu DITOLAK dan daftar tidak berubah.
+# Simulasi Jumat 2026-11-20 (tanggal baru untuk fase
+# ini). Tanggal ini mungkin sudah berisi Alpa otomatis milik data fase
+# sebelumnya (dashboard waktu nyata memanggil pastikan_alpa untuk
+# kemarin), jadi angka pada judul tiap bagian diverifikasi terhadap
+# hitungan DB yang setara, dan keanggotaan diperiksa lewat nama khas.
+# ===========================================================================
+TGL_S = "2026-11-20"
+
+start_server()  # waktu nyata: siapkan data khas fase ini lewat alur admin
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Lapor"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kl = opt_val(form_siswa, "UJI-Kelas-Lapor")
+must(kl, "kelas UJI-Kelas-Lapor dibuat untuk uji laporan dashboard")
+req(admin, "/admin/siswa", {"nama": "Siswa Lapor Telat", "kode": "UJI-R01", "class_id": kl})
+req(admin, "/admin/siswa", {"nama": "Siswa Lapor Belum", "kode": "UJI-R02", "class_id": kl})
+req(admin, "/admin/siswa", {"nama": "Siswa Lapor Sakit", "kode": "UJI-R03", "class_id": kl})
+req(admin, "/admin/guru", {"nama": "Guru Lapor Telat", "username": "gurulapor1",
+                           "password": "gurulapor123", "mapel": "UJI-LaporMapel"})
+req(admin, "/admin/guru", {"nama": "Guru Lapor Belum", "username": "gurulapor2",
+                           "password": "gurulapor123", "mapel": "UJI-LaporMapel"})
+s, url, daftar_siswa_s = req(admin, "/admin/siswa")
+c_sakit_id = id_dari_daftar(daftar_siswa_s, "/admin/siswa", "UJI-R03")
+must(c_sakit_id, "id siswa UJI-R03 terbaca untuk input Sakit manual")
+s, url, daftar_guru_s = req(admin, "/admin/guru")
+chunk_gx = next((c for c in daftar_guru_s.split("<li>") if "gurulapor1" in c), "")
+m_qr_s = re.search(r"kode QR: <code>(G\d+)</code>", chunk_gx)
+must(m_qr_s is not None, "kode QR Guru Lapor Telat terbaca")
+gx_qr = m_qr_s.group(1)
+must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
+         "AND ref_id IN (SELECT id FROM students WHERE kode LIKE 'UJI-R%')",
+         (TGL_S,)) == 0,
+     "siswa khas Fase S belum punya catatan apa pun pada 2026-11-20")
+
+
+def blok_laporan(htmltxt, judul):
+    m = re.search(r"<h4>" + re.escape(judul) + r" \((\d+)\)</h4>"
+                  r"<ul class=\"plain-list\">(.*?)</ul>", htmltxt, re.S)
+    return (int(m.group(1)), m.group(2)) if m else (None, "")
+
+
+def exp_belum(tipe):
+    if tipe == "siswa":
+        return dbq("SELECT COUNT(*) FROM students s LEFT JOIN kehadiran k "
+                   "ON k.tanggal=? AND k.ref_type='siswa' AND k.ref_id=s.id "
+                   "WHERE k.id IS NULL OR (k.metode='auto' AND k.status='Alpa')",
+                   (TGL_S,))
+    return dbq("SELECT COUNT(*) FROM users u LEFT JOIN kehadiran k "
+               "ON k.tanggal=? AND k.ref_type='guru' AND k.ref_id=u.id "
+               "WHERE u.role='guru' AND u.aktif=1 "
+               "AND (k.id IS NULL OR (k.metode='auto' AND k.status='Alpa'))",
+               (TGL_S,))
+
+
+# --- Jumat 07:30: siswa A scan Terlambat; siswa C dicatat Sakit manual ---
+start_server(f"{TGL_S}T07:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-R01"})
+must("Siswa Lapor Telat" in hasil and "Terlambat" in hasil,
+     "scan Siswa Lapor Telat pukul 07:30 -> Terlambat")
+s, url, hasil = req(admin, "/kehadiran/edit",
+                    {"tanggal": TGL_S, "tipe": "siswa", "id": c_sakit_id,
+                     "status": "Sakit", "jam": ""})
+must("ditandai Sakit" in hasil, "input manual Sakit Siswa Lapor Sakit tersimpan")
+
+# --- Jumat 07:45: guru X scan Terlambat ---
+start_server(f"{TGL_S}T07:45:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": gx_qr})
+must("Guru Lapor Telat" in hasil and "Terlambat" in hasil,
+     "scan Guru Lapor Telat pukul 07:45 -> Terlambat")
+
+# --- Jumat 08:59: panel masih Kedatangan Terakhir Hari Ini ---
+start_server(f"{TGL_S}T08:59:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must("Kedatangan Terakhir Hari Ini" in dash,
+     "dashboard 08:59: panel 'Kedatangan Terakhir Hari Ini' tampil")
+must("Laporan Hari Ini" not in dash,
+     "dashboard 08:59: 'Laporan Hari Ini' belum tampil")
+
+# --- Jumat 09:01: panel berganti Laporan Hari Ini ---
+start_server(f"{TGL_S}T09:01:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must("Laporan Hari Ini" in dash,
+     "dashboard 09:01: panel 'Laporan Hari Ini' tampil")
+must("Kedatangan Terakhir Hari Ini" not in dash,
+     "dashboard 09:01: panel 'Kedatangan Terakhir Hari Ini' hilang")
+n_st, b_st = blok_laporan(dash, "Siswa Terlambat")
+n_sb, b_sb = blok_laporan(dash, "Siswa Belum Scan")
+n_gt, b_gt = blok_laporan(dash, "Guru Terlambat")
+n_gb, b_gb = blok_laporan(dash, "Guru Belum Scan")
+must(n_st is not None and n_sb is not None and n_gt is not None and n_gb is not None,
+     "laporan memuat 4 bagian: Siswa Terlambat, Siswa Belum Scan, "
+     "Guru Terlambat, Guru Belum Scan")
+must("Siswa Lapor Telat" in b_st and "07:30" in b_st,
+     "Siswa Terlambat: Siswa Lapor Telat tampil dengan jam scan 07:30")
+must("Siswa Lapor Telat" not in b_sb,
+     "Siswa Lapor Telat tidak ikut tampil di Siswa Belum Scan")
+must("Siswa Lapor Belum" in b_sb,
+     "Siswa Belum Scan: Siswa Lapor Belum (tidak pernah scan) tampil")
+must("Siswa Lapor Sakit" not in b_st and "Siswa Lapor Sakit" not in b_sb,
+     "siswa Sakit manual tidak muncul di Terlambat maupun Belum Scan")
+must("Guru Lapor Telat" in b_gt and "07:45" in b_gt,
+     "Guru Terlambat: Guru Lapor Telat tampil dengan jam scan 07:45")
+must("Guru Lapor Belum" in b_gb and "Guru Lapor Telat" not in b_gb,
+     "Guru Belum Scan: Guru Lapor Belum tampil, Guru Lapor Telat tidak")
+must(n_st == dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND "
+                 "ref_type='siswa' AND status='Terlambat'", (TGL_S,)),
+     f"angka Siswa Terlambat pada judul bagian cocok dengan DB ({n_st})")
+must(n_gt == dbq("SELECT COUNT(*) FROM kehadiran k JOIN users u ON u.id=k.ref_id "
+                 "WHERE k.tanggal=? AND k.ref_type='guru' AND k.status='Terlambat' "
+                 "AND u.role='guru' AND u.aktif=1", (TGL_S,)),
+     f"angka Guru Terlambat pada judul bagian cocok dengan DB ({n_gt})")
+must(n_sb == exp_belum("siswa"),
+     f"angka Siswa Belum Scan pada judul bagian cocok dengan DB ({n_sb})")
+must(n_gb == exp_belum("guru"),
+     f"angka Guru Belum Scan pada judul bagian cocok dengan DB ({n_gb})")
+must(b_st.count('<span class="no">') == n_st
+     and b_sb.count('<span class="no">') == n_sb
+     and b_gt.count('<span class="no">') == n_gt
+     and b_gb.count('<span class="no">') == n_gb,
+     "jumlah baris bernomor di tiap bagian sama dengan angka pada judulnya")
+must(nomor_dari(b_sb, r'<span class="no">(\d+)\.</span>') == list(range(1, n_sb + 1)),
+     "Siswa Belum Scan: nomor baris berurutan 1..N")
+
+# --- Jumat 09:05: scan susulan siswa B kini DITOLAK (aturan berubah) ---
+# Keputusan user sesudah Fase S dibuat: scan pukul 09:00 ke atas tidak
+# berlaku lagi. Scan B pukul 09:05 ditolak dengan pesan penutupan, B
+# TETAP di Siswa Belum Scan, dan tidak ada catatan Terlambat yang dibuat.
+start_server(f"{TGL_S}T09:05:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-R02"})
+must("Scan sudah ditutup" in hasil and "Siswa Lapor Belum" in hasil,
+     "scan susulan Siswa Lapor Belum pukul 09:05 DITOLAK: "
+     "'Scan sudah ditutup'")
+b_r02_id = dbq("SELECT id FROM students WHERE kode='UJI-R02'")
+must(dbq("SELECT status || '/' || metode FROM kehadiran WHERE tanggal=? "
+         "AND ref_type='siswa' AND ref_id=?", (TGL_S, b_r02_id)) == "Alpa/auto",
+     "scan yang ditolak tidak membuat catatan Terlambat: B tetap Alpa/auto")
+s, url, dash = req(admin, "/dashboard")
+n_st2, b_st2 = blok_laporan(dash, "Siswa Terlambat")
+n_sb2, b_sb2 = blok_laporan(dash, "Siswa Belum Scan")
+must("Siswa Lapor Belum" not in b_st2,
+     "sesudah scan 09:05 yang ditolak: B TIDAK masuk Siswa Terlambat")
+must("Siswa Lapor Belum" in b_sb2,
+     "sesudah scan 09:05 yang ditolak: B tetap di Siswa Belum Scan")
+must(n_st2 == n_st and n_sb2 == n_sb,
+     "sesudah scan 09:05 yang ditolak: angka Siswa Terlambat & "
+     "Siswa Belum Scan tidak berubah")
+
+# ===========================================================================
+# Fase T — Dua keputusan user soal pukul 09:00 (Senin 2026-11-23, tanggal
+# segar):
+# (1) RESET KARTU: mulai 09:00 ketujuh kartu statistik dashboard kembali
+#     ke nilai AWAL hari (Siswa Hadir/Terlambat/Sakit-Izin/Alpa dan Guru
+#     Hadir = 0; Siswa Belum Scan = total siswa; Guru Belum Scan = total
+#     guru aktif). Ini HANYA tampilan — catatan tidak diubah, dan panel
+#     Laporan Hari Ini di bawahnya tetap menampilkan daftar sebenarnya.
+# (2) SCAN DITUTUP: scan pukul 09:00 ke atas untuk orang yang belum
+#     punya catatan asli hari itu DITOLAK ("Scan sudah ditutup") —
+#     berlaku di alur form biasa maupun ajax kamera — dan catatan Alpa
+#     otomatisnya tetap berdiri. Yang sudah tercatat asli tetap mendapat
+#     "Sudah tercatat". Pukul 08:59 scan masih diterima sebagai Terlambat.
+# ===========================================================================
+TGL_T = "2026-11-23"
+
+start_server()  # waktu nyata: siapkan data khas fase ini lewat alur admin
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Reset"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kr = opt_val(form_siswa, "UJI-Kelas-Reset")
+must(kr, "kelas UJI-Kelas-Reset dibuat untuk uji reset & tutup scan")
+req(admin, "/admin/siswa", {"nama": "Siswa Reset Hadir", "kode": "UJI-T01", "class_id": kr})
+req(admin, "/admin/siswa", {"nama": "Siswa Reset Telat", "kode": "UJI-T02", "class_id": kr})
+req(admin, "/admin/siswa", {"nama": "Siswa Reset Belum", "kode": "UJI-T03", "class_id": kr})
+req(admin, "/admin/siswa", {"nama": "Siswa Reset Delapan", "kode": "UJI-T04", "class_id": kr})
+req(admin, "/admin/guru", {"nama": "Guru Reset Telat", "username": "gurureset1",
+                           "password": "gurureset123", "mapel": "UJI-ResetMapel"})
+req(admin, "/admin/guru", {"nama": "Guru Reset Belum", "username": "gurureset2",
+                           "password": "gurureset123", "mapel": "UJI-ResetMapel"})
+s, url, daftar_guru_t = req(admin, "/admin/guru")
+
+
+def qr_guru_t(htmltxt, username):
+    chunk = next((c for c in htmltxt.split("<li>") if username in c), "")
+    m = re.search(r"kode QR: <code>(G\d+)</code>", chunk)
+    return m.group(1) if m else None
+
+
+gr1_qr = qr_guru_t(daftar_guru_t, "gurureset1")
+gr2_qr = qr_guru_t(daftar_guru_t, "gurureset2")
+must(gr1_qr and gr2_qr, "kode QR kedua guru Fase T terbaca")
+t03_id = dbq("SELECT id FROM students WHERE kode='UJI-T03'")
+gr2_id = dbq("SELECT id FROM users WHERE username='gurureset2'")
+total_siswa_t = dbq("SELECT COUNT(*) FROM students")
+total_guru_t = dbq("SELECT COUNT(*) FROM users WHERE role='guru' AND aktif=1")
+must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=?", (TGL_T,)) == 0,
+     "tanggal uji Fase T 2026-11-23 belum punya catatan kehadiran apa pun")
+
+# --- Senin 06:55: siswa T01 scan Hadir ---
+start_server(f"{TGL_T}T06:55:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-T01"})
+must("Siswa Reset Hadir" in hasil and "Hadir" in hasil and "06:55" in hasil,
+     "scan Siswa Reset Hadir pukul 06:55 -> Hadir")
+
+# --- Senin 07:30: siswa T02 scan Terlambat ---
+start_server(f"{TGL_T}T07:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-T02"})
+must("Siswa Reset Telat" in hasil and "Terlambat" in hasil,
+     "scan Siswa Reset Telat pukul 07:30 -> Terlambat")
+
+# --- Senin 07:45: Guru Reset Telat scan Terlambat ---
+start_server(f"{TGL_T}T07:45:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": gr1_qr})
+must("Guru Reset Telat" in hasil and "Terlambat" in hasil,
+     "scan Guru Reset Telat pukul 07:45 -> Terlambat")
+
+# --- Senin 08:59: scan MASIH diterima; kartu masih menampilkan nilai riil ---
+start_server(f"{TGL_T}T08:59:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-T04"})
+must("Siswa Reset Delapan" in hasil and "Terlambat" in hasil,
+     "scan pukul 08:59 masih diterima -> Terlambat (penutupan mulai 09:00)")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Hadir") == 3,
+     "dashboard 08:59: Siswa Hadir riil = 3 (1 Hadir + 2 Terlambat)")
+must(angka_kartu(dash, "Siswa Terlambat") == 2,
+     "dashboard 08:59: Siswa Terlambat riil = 2")
+must(angka_kartu(dash, "Siswa Alpa") == 0,
+     "dashboard 08:59: Siswa Alpa riil = 0 (Alpa otomatis belum terisi)")
+must(angka_kartu(dash, "Guru Hadir") == 1,
+     "dashboard 08:59: Guru Hadir riil = 1")
+exp_belum_s = total_siswa_t - dbq(
+    "SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
+    "AND NOT (metode='auto' AND status='Alpa')", (TGL_T,))
+exp_belum_g = total_guru_t - dbq(
+    "SELECT COUNT(*) FROM kehadiran k JOIN users u ON u.id=k.ref_id "
+    "WHERE k.tanggal=? AND k.ref_type='guru' AND u.role='guru' AND u.aktif=1 "
+    "AND NOT (k.metode='auto' AND k.status='Alpa')", (TGL_T,))
+must(angka_kartu(dash, "Siswa Belum Scan") == exp_belum_s,
+     f"dashboard 08:59: Siswa Belum Scan riil = {exp_belum_s} "
+     "(total - yang sudah tercatat, rumus Fase P)")
+must(angka_kartu(dash, "Guru Belum Scan") == exp_belum_g,
+     f"dashboard 08:59: Guru Belum Scan riil = {exp_belum_g}")
+
+# --- Senin 09:00 TEPAT: scan siswa yang belum scan DITOLAK ---
+start_server(f"{TGL_T}T09:00:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-T03"})
+must("Scan sudah ditutup" in hasil and "Siswa Reset Belum" in hasil,
+     "scan tepat 09:00 untuk siswa yang belum scan DITOLAK: "
+     "'Scan sudah ditutup'")
+must(dbq("SELECT status || '/' || metode FROM kehadiran WHERE tanggal=? "
+         "AND ref_type='siswa' AND ref_id=?", (TGL_T, t03_id)) == "Alpa/auto",
+     "sesudah penolakan 09:00: Siswa Reset Belum tetap Alpa/auto")
+
+# --- Senin 09:01: kartu RESET ke nilai awal; panel laporan tetap riil ---
+start_server(f"{TGL_T}T09:01:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Hadir") == 0,
+     "dashboard 09:01: kartu Siswa Hadir di-reset ke 0")
+must(angka_kartu(dash, "Siswa Terlambat") == 0,
+     "dashboard 09:01: kartu Siswa Terlambat di-reset ke 0")
+must(angka_kartu(dash, "Siswa Sakit/Izin") == 0,
+     "dashboard 09:01: kartu Siswa Sakit/Izin di-reset ke 0")
+must(angka_kartu(dash, "Siswa Alpa") == 0,
+     "dashboard 09:01: kartu Siswa Alpa di-reset ke 0")
+must(angka_kartu(dash, "Guru Hadir") == 0,
+     "dashboard 09:01: kartu Guru Hadir di-reset ke 0")
+must(angka_kartu(dash, "Siswa Belum Scan") == total_siswa_t,
+     f"dashboard 09:01: Siswa Belum Scan di-reset ke total siswa "
+     f"{total_siswa_t}")
+must(angka_kartu(dash, "Guru Belum Scan") == total_guru_t,
+     f"dashboard 09:01: Guru Belum Scan di-reset ke total guru aktif "
+     f"{total_guru_t}")
+must("Laporan Hari Ini" in dash,
+     "dashboard 09:01: panel Laporan Hari Ini tampil di bawah kartu reset")
+n_st_t, b_st_t = blok_laporan(dash, "Siswa Terlambat")
+n_gt_t, b_gt_t = blok_laporan(dash, "Guru Terlambat")
+n_sb_t, b_sb_t = blok_laporan(dash, "Siswa Belum Scan")
+must("Siswa Reset Telat" in b_st_t and "Siswa Reset Delapan" in b_st_t,
+     "laporan 09:01 tetap riil: kedua siswa Terlambat tampil "
+     "(data TIDAK ikut di-reset)")
+must("Guru Reset Telat" in b_gt_t,
+     "laporan 09:01 tetap riil: Guru Reset Telat tampil")
+must("Siswa Reset Belum" in b_sb_t,
+     "laporan 09:01: Siswa Reset Belum tampil di Siswa Belum Scan")
+
+# --- Senin 09:30: penolakan guru (form + ajax) & duplikat riil tetap info ---
+start_server(f"{TGL_T}T09:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, resp = req(admin, "/api/scan", {"kode": "UJI-T03", "ajax": "1"})
+data_tutup = json.loads(resp)
+must(data_tutup["jenis"] == "error"
+     and "Scan sudah ditutup" in data_tutup["judul"]
+     and "Siswa Reset Belum" in data_tutup["pesan"],
+     "ajax 09:30: scan siswa belum scan -> JSON error 'Scan sudah ditutup' "
+     "(banner kamera berkelanjutan menerima pesan penutupan)")
+s, url, hasil = req(admin, "/api/scan", {"kode": gr2_qr})
+must("Scan sudah ditutup" in hasil and "Guru Reset Belum" in hasil,
+     "scan guru yang belum scan pukul 09:30 DITOLAK: 'Scan sudah ditutup'")
+must(dbq("SELECT status || '/' || metode FROM kehadiran WHERE tanggal=? "
+         "AND ref_type='guru' AND ref_id=?", (TGL_T, gr2_id)) == "Alpa/auto",
+     "sesudah penolakan 09:30: Guru Reset Belum tetap Alpa/auto")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-T02"})
+must("Sudah tercatat" in hasil,
+     "scan ulang siswa yang sudah tercatat asli pukul 09:30 tetap "
+     "'Sudah tercatat' (bukan penolakan tutup)")
+must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
+         "AND ref_id=?", (TGL_T, t03_id)) == 1,
+     "Siswa Reset Belum tetap punya tepat 1 catatan (Alpa otomatis) — "
+     "penolakan tidak membuat/mengubah catatan apa pun")
 
 stop_server()
 if os.path.exists(DBUJI):
