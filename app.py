@@ -504,6 +504,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.redirect("/login", "Silakan masuk dulu.")
         if path == "/dashboard":
             return self.dashboard(user, flash)
+        if path == "/cari":
+            return self.cari(user, qs, flash)
         if path == "/ganti-password":
             body = """<h2>Ganti Password</h2>
             <form method="post" action="/ganti-password" class="card form-card">
@@ -683,7 +685,14 @@ class Handler(BaseHTTPRequestHandler):
         body = f"""<h2>Dashboard</h2>
         <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))} &bull;
         batas Hadir {JAM_BATAS_HADIR.strftime('%H:%M')}, Alpa otomatis {JAM_BATAS_ALPA.strftime('%H:%M')}</p>
-        {warn}<div class="stat-grid">{cards}</div>
+        {warn}<div class="card search-card">
+          <form method="get" action="/cari" class="search-form">
+            <label class="search-label">Pencarian
+              <input name="q" placeholder="Cari nama siswa, NIS, kelas, nama guru, atau mata pelajaran…"></label>
+            <button type="submit" class="btn btn-primary">Cari</button>
+          </form>
+        </div>
+        <div class="stat-grid">{cards}</div>
         <div class="quick-grid">
           <a class="quick-card" href="/scan-gerbang">{icon('scan')}<span>Scan Gerbang</span></a>
           <a class="quick-card" href="/tabel-siswa">{icon('users')}<span>Tabel Siswa</span></a>
@@ -1439,6 +1448,75 @@ def parse_multipart(body, content_type):
 # ---------------------------------------------------------------------------
 # Handler tambahan: admin CRUD + tampilan + wallpaper (ditempel ke Handler)
 # ---------------------------------------------------------------------------
+def _cari(self, user, qs, flash):
+    """Pencarian global dari Dashboard: cocok sebagian (tidak peka huruf)
+    pada nama siswa, NIS, nama kelas, nama guru, username guru, kode QR
+    guru, dan mata pelajaran (mapel). Boleh dipakai admin & guru; tautan
+    /admin/ hanya dirender untuk admin."""
+    q = (qs.get("q") or [""])[0].strip()
+    form = f"""<div class="card search-card">
+      <form method="get" action="/cari" class="search-form">
+        <label class="search-label">Pencarian
+          <input name="q" value="{esc(q)}" placeholder="Cari nama siswa, NIS, kelas, nama guru, atau mata pelajaran…"></label>
+        <button type="submit" class="btn btn-primary">Cari</button>
+      </form></div>"""
+    if not q:
+        body = f"""<h2>Pencarian</h2>
+        {form}
+        <div class="card"><p class="muted">Ketik kata kunci untuk mencari.</p></div>"""
+        return self.send_html(layout(user, "Pencarian", body, flash))
+    # Escape wildcard LIKE (% dan _) plus escape char-nya sendiri, supaya
+    # kata kunci dicocokkan apa adanya.
+    pola = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    conn = db()
+    siswa_rows = conn.execute(
+        """SELECT s.*, c.nama AS kelas FROM students s
+           JOIN classes c ON c.id = s.class_id
+           WHERE s.nama LIKE ? ESCAPE '\\' OR s.kode LIKE ? ESCAPE '\\'
+              OR c.nama LIKE ? ESCAPE '\\'
+           ORDER BY c.nama, s.nama LIMIT 50""",
+        (pola, pola, pola)).fetchall()
+    guru_rows = conn.execute(
+        """SELECT * FROM users WHERE role='guru' AND aktif=1 AND
+           (nama LIKE ? ESCAPE '\\' OR COALESCE(mapel,'') LIKE ? ESCAPE '\\'
+            OR username LIKE ? ESCAPE '\\' OR COALESCE(kode_qr,'') LIKE ? ESCAPE '\\')
+           ORDER BY nama LIMIT 50""",
+        (pola, pola, pola, pola)).fetchall()
+    conn.close()
+    admin = user["role"] == "admin"
+    ringkasan = (f'<p class="muted">Ditemukan {len(siswa_rows)} siswa dan '
+                 f'{len(guru_rows)} guru untuk "{esc(q)}".</p>')
+    bagian = ""
+    if siswa_rows:
+        items = ""
+        for r in siswa_rows:
+            if admin:
+                tautan = (f' &mdash; <a href="/admin/kelas/{r["class_id"]}">Lihat Kelas</a>'
+                          f' &mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a>')
+            else:
+                tautan = f' &mdash; <a href="/tabel-siswa?kelas={r["class_id"]}">Lihat Kelas</a>'
+            items += (f'<li><b>{esc(r["nama"])}</b> &mdash; NIS: '
+                      f'<code>{esc(r["kode"])}</code> &mdash; {esc(r["kelas"])}{tautan}</li>')
+        bagian += f'<div class="card"><h3>Siswa</h3><ul class="plain-list">{items}</ul></div>'
+    if guru_rows:
+        items = ""
+        for r in guru_rows:
+            tautan = (f' &mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a>'
+                      if admin else "")
+            items += (f'<li><b>{esc(r["nama"])}</b> &mdash; {esc(r["mapel"] or "—")} '
+                      f'&mdash; username: <code>{esc(r["username"])}</code> '
+                      f'&mdash; kode QR: <code>{esc(r["kode_qr"] or "-")}</code>{tautan}</li>')
+        bagian += f'<div class="card"><h3>Guru</h3><ul class="plain-list">{items}</ul></div>'
+    if not bagian:
+        bagian = (f'<div class="card"><p class="muted">Tidak ada hasil untuk '
+                  f'"{esc(q)}". Coba kata kunci lain.</p></div>')
+    body = f"""<h2>Pencarian</h2>
+    {form}
+    {ringkasan}
+    {bagian}"""
+    return self.send_html(layout(user, "Pencarian", body, flash))
+
+
 def _admin_guru(self, user, flash):
     conn = db()
     rows = conn.execute(
@@ -2180,6 +2258,7 @@ def _post_admin_backup_pulihkan(self):
 
 
 # Tempelkan handler-handler di atas sebagai method Handler.
+Handler.cari = _cari
 Handler.admin_guru = _admin_guru
 Handler.post_admin_guru = _post_admin_guru
 Handler._get_guru = _get_guru

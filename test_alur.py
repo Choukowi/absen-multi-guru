@@ -824,6 +824,85 @@ must("Data tidak ditemukan." in hasil
      and urllib.parse.urlparse(url).path == "/admin/kelas",
      "detail id tak dikenal -> diarahkan ke daftar kelas + 'Data tidak ditemukan.'")
 
+# ===========================================================================
+# Fase L — Pencarian global dari Dashboard: GET /cari?q= cocok pada nama
+# siswa, NIS, nama kelas, nama guru, dan mata pelajaran (mapel). Guru boleh
+# memakai & melihat hasil, tapi TANPA tautan /admin/; anonim -> /login.
+# ===========================================================================
+start_server()
+admin, url, _ = login("admin", "admin123")
+# --- siapkan data khas pencarian lewat alur admin yang sudah ada ---
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Cari"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kc = opt_val(form_siswa, "UJI-Kelas-Cari")
+must(kc, "kelas UJI-Kelas-Cari dibuat untuk uji pencarian")
+req(admin, "/admin/siswa", {"nama": "Cari Siswa Unik", "kode": "UJI-C01", "class_id": kc})
+req(admin, "/admin/siswa", {"nama": "Cari Teman Sekelas", "kode": "UJI-C02", "class_id": kc})
+req(admin, "/admin/guru", {"nama": "Guru Cari Spesial", "username": "gurucari",
+                           "password": "gurucari123", "mapel": "UJI-Senilukis"})
+# --- dashboard memuat formulir pencarian ---
+s, url, dash = req(admin, "/dashboard")
+must('action="/cari"' in dash and 'name="q"' in dash
+     and "Cari nama siswa, NIS, kelas, nama guru, atau mata pelajaran" in dash,
+     "dashboard: formulir pencarian (GET /cari, input q, placeholder lengkap)")
+# --- cari potongan nama siswa: siswa itu + NIS + kelas; siswa lain tidak ikut ---
+s, url, hasil = req(admin, "/cari?q=Siswa+Unik")
+must("Cari Siswa Unik" in hasil and "UJI-C01" in hasil and "UJI-Kelas-Cari" in hasil,
+     "cari nama siswa: ketemu nama + NIS + kelasnya")
+must("Siswa Lain Kelas" not in hasil and "Cari Teman Sekelas" not in hasil,
+     "cari nama siswa: siswa tak terkait TIDAK ikut tampil")
+must(f'href="/admin/kelas/{kc}"' in hasil and "/admin/siswa/" in hasil
+     and "/edit" in hasil,
+     "hasil siswa untuk admin: tautan Lihat Kelas + Edit")
+must('Ditemukan 1 siswa dan 0 guru untuk "Siswa Unik"' in hasil,
+     "ringkasan hasil: 'Ditemukan 1 siswa dan 0 guru'")
+# huruf kecil tetap ketemu (tidak peka huruf besar/kecil)
+s, url, hasil = req(admin, "/cari?q=siswa+unik")
+must("Cari Siswa Unik" in hasil, "pencarian tidak peka huruf besar/kecil")
+# --- cari potongan NIS ---
+s, url, hasil = req(admin, "/cari?q=C02")
+must("Cari Teman Sekelas" in hasil and "UJI-C02" in hasil,
+     "cari potongan NIS: ketemu siswa pemilik NIS itu")
+# --- cari nama kelas: semua siswa kelas itu tampil ---
+s, url, hasil = req(admin, "/cari?q=UJI-Kelas-Cari")
+must("Cari Siswa Unik" in hasil and "Cari Teman Sekelas" in hasil,
+     "cari nama kelas: semua siswa kelas itu tampil")
+# --- cari nama guru: guru + mapelnya; admin dapat tautan Edit guru ---
+s, url, hasil = req(admin, "/cari?q=Guru+Cari")
+must("Guru Cari Spesial" in hasil and "UJI-Senilukis" in hasil,
+     "cari nama guru: ketemu guru + mata pelajarannya")
+must("/admin/guru/" in hasil and "/edit" in hasil,
+     "hasil guru untuk admin: tautan Edit guru")
+# --- cari potongan mapel ---
+s, url, hasil = req(admin, "/cari?q=Matematika")
+must("Guru Uji" in hasil and "UJI-Matematika" in hasil,
+     "cari mapel 'Matematika': ketemu guru yang mengajar mapel itu")
+# --- kata kunci ngawur: keadaan kosong ---
+s, url, hasil = req(admin, "/cari?q=zzzqqq")
+must('Tidak ada hasil untuk "zzzqqq". Coba kata kunci lain.' in hasil,
+     "tanpa hasil: pesan keadaan kosong yang ramah")
+# --- q kosong: ajakan mengetik + formulir tampil lagi ---
+s, url, hasil = req(admin, "/cari?q=")
+must("Ketik kata kunci untuk mencari." in hasil and 'action="/cari"' in hasil,
+     "q kosong: ajakan 'Ketik kata kunci untuk mencari.' + formulir pencarian")
+# --- guru BOLEH mencari & melihat hasil, tapi TANPA tautan /admin/ apa pun ---
+guru, url, _ = login("guruuji", "guruuji123")
+s, url, dash_guru = req(guru, "/dashboard")
+must('action="/cari"' in dash_guru and 'name="q"' in dash_guru,
+     "dashboard guru juga memuat formulir pencarian")
+s, url, hasil_guru = req(guru, "/cari?q=Cari")
+must("Cari Siswa Unik" in hasil_guru and "Guru Cari Spesial" in hasil_guru,
+     "guru bisa memakai /cari dan melihat hasil siswa + guru")
+must("/admin/" not in hasil_guru,
+     "hasil pencarian untuk guru: TIDAK ada tautan /admin/ sama sekali")
+must(f"/tabel-siswa?kelas={kc}" in hasil_guru,
+     "hasil siswa untuk guru: tautan 'Lihat Kelas' ke tabel mingguan kelas itu")
+# --- anonim diarahkan ke /login ---
+anon = client()
+s, url, hal = req(anon, "/cari?q=Cari")
+must(urllib.parse.urlparse(url).path == "/login",
+     "anonim membuka /cari -> diarahkan ke /login")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)
