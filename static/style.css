@@ -116,6 +116,9 @@ input[type="file"] { padding: 9px 12px; }
 .plain-list { list-style: none; padding: 0; margin: 0; }
 .plain-list li { padding: 10px 0; border-bottom: 1px solid #eef1f6; }
 .plain-list li:last-child { border-bottom: 0; }
+ol.plain-list { list-style: decimal; padding-left: 26px; }
+ol.plain-list li { padding-left: 4px; }
+ol.plain-list li::marker { color: var(--muted); font-weight: 600; }
 
 /* ---------- Dashboard ---------- */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
