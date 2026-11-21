@@ -1269,14 +1269,21 @@ must(len(no_tab_guru) >= 2 and no_tab_guru[0] == 1 and no_tab_guru[1] == 2
 # ===========================================================================
 # Fase S — Panel dashboard berganti pukul 09:00: sebelum 09:00 tampil
 # "Kedatangan Terakhir Hari Ini"; mulai 09:00 panel itu HILANG, diganti
-# "Laporan Hari Ini" berisi 4 daftar bernomor — Siswa Terlambat, Siswa
-# Belum Scan (hanya Alpa otomatis / tanpa catatan sama sekali), Guru
-# Terlambat, Guru Belum Scan. Yang Sakit/Izin tidak muncul di daftar
-# mana pun. Daftar dihitung langsung dari catatan hari ini (bukan
-# snapshot). CATATAN: dulu scan susulan sesudah 09:00 memindahkan
-# orangnya dari Belum Scan ke Terlambat; keputusan user berikutnya
-# (Fase T) menutup scan pukul 09:00 ke atas, jadi segmen 09:05 di fase
-# ini kini membuktikan scan itu DITOLAK dan daftar tidak berubah.
+# "Laporan Hari Ini" berisi DUA kartu yang bisa diklik — kolom Siswa
+# dan kolom Guru — masing-masing hanya memuat angka ringkasan hari ini
+# (Terlambat & Belum Scan). Daftar namanya TIDAK tampil di dashboard,
+# melainkan di halaman /laporan/siswa dan /laporan/guru: dua bagian
+# bernomor Terlambat & Belum Scan (Belum Scan = hanya Alpa otomatis /
+# tanpa catatan sama sekali). Yang Sakit/Izin tidak muncul di daftar
+# mana pun. Kartu dan halaman memakai _data_laporan yang sama, jadi
+# angkanya selalu cocok. (Rancangan awal fase ini menampilkan 4 daftar
+# langsung di dashboard; diubah per permintaan user menjadi 2 kartu
+# yang bisa diklik — assertion daftar dipindah ke halaman laporan.)
+# Daftar dihitung langsung dari catatan hari ini (bukan snapshot).
+# CATATAN: dulu scan susulan sesudah 09:00 memindahkan orangnya dari
+# Belum Scan ke Terlambat; keputusan user berikutnya (Fase T) menutup
+# scan pukul 09:00 ke atas, jadi segmen 09:05 di fase ini kini
+# membuktikan scan itu DITOLAK dan daftar tidak berubah.
 # Simulasi Jumat 2026-11-20 (tanggal baru untuk fase
 # ini). Tanggal ini mungkin sudah berisi Alpa otomatis milik data fase
 # sebelumnya (dashboard waktu nyata memanggil pastikan_alpa untuk
@@ -1318,6 +1325,20 @@ def blok_laporan(htmltxt, judul):
     return (int(m.group(1)), m.group(2)) if m else (None, "")
 
 
+def kartu_laporan(htmltxt, href):
+    """(Terlambat, Belum Scan) dari kartu panel laporan di dashboard
+    yang menuju href; (None, None) bila kartunya tidak ada."""
+    m = re.search(r'<a class="laporan-card" href="' + re.escape(href)
+                  + r'">(.*?)</a>', htmltxt, re.S)
+    if not m:
+        return None, None
+    blok = m.group(1)
+    t = re.search(r"Terlambat: <b>(\d+)</b>", blok)
+    b = re.search(r"Belum Scan: <b>(\d+)</b>", blok)
+    return (int(t.group(1)) if t else None,
+            int(b.group(1)) if b else None)
+
+
 def exp_belum(tipe):
     if tipe == "siswa":
         return dbq("SELECT COUNT(*) FROM students s LEFT JOIN kehadiran k "
@@ -1357,6 +1378,9 @@ must("Kedatangan Terakhir Hari Ini" in dash,
      "dashboard 08:59: panel 'Kedatangan Terakhir Hari Ini' tampil")
 must("Laporan Hari Ini" not in dash,
      "dashboard 08:59: 'Laporan Hari Ini' belum tampil")
+must('href="/laporan/siswa"' not in dash and 'href="/laporan/guru"' not in dash,
+     "dashboard 08:59: kartu laporan (tautan /laporan/siswa & "
+     "/laporan/guru) belum tampil")
 
 # --- Jumat 09:01: panel berganti Laporan Hari Ini ---
 start_server(f"{TGL_S}T09:01:00")
@@ -1366,13 +1390,56 @@ must("Laporan Hari Ini" in dash,
      "dashboard 09:01: panel 'Laporan Hari Ini' tampil")
 must("Kedatangan Terakhir Hari Ini" not in dash,
      "dashboard 09:01: panel 'Kedatangan Terakhir Hari Ini' hilang")
-n_st, b_st = blok_laporan(dash, "Siswa Terlambat")
-n_sb, b_sb = blok_laporan(dash, "Siswa Belum Scan")
-n_gt, b_gt = blok_laporan(dash, "Guru Terlambat")
-n_gb, b_gb = blok_laporan(dash, "Guru Belum Scan")
+# Panel kini hanya DUA kartu ringkasan yang bisa diklik (kolom Siswa &
+# kolom Guru); daftar nama TIDAK tampil lagi di dashboard.
+ks_t, ks_b = kartu_laporan(dash, "/laporan/siswa")
+kg_t, kg_b = kartu_laporan(dash, "/laporan/guru")
+must(ks_t is not None and ks_b is not None,
+     "dashboard 09:01: kartu kolom Siswa tampil (tautan /laporan/siswa "
+     "+ angka Terlambat & Belum Scan)")
+must(kg_t is not None and kg_b is not None,
+     "dashboard 09:01: kartu kolom Guru tampil (tautan /laporan/guru "
+     "+ angka Terlambat & Belum Scan)")
+must("Klik untuk lihat daftar" in dash,
+     "dashboard 09:01: kartu laporan memuat petunjuk klik untuk "
+     "melihat daftar")
+must("Siswa Lapor Telat" not in dash and "Siswa Lapor Belum" not in dash
+     and "Siswa Lapor Sakit" not in dash
+     and "Guru Lapor Telat" not in dash and "Guru Lapor Belum" not in dash,
+     "dashboard 09:01: TIDAK ada nama siswa/guru tampil di panel "
+     "laporan (hanya dua kartu ringkasan)")
+must(ks_t == dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND "
+                 "ref_type='siswa' AND status='Terlambat'", (TGL_S,)),
+     f"angka Terlambat pada kartu Siswa cocok dengan DB ({ks_t})")
+must(kg_t == dbq("SELECT COUNT(*) FROM kehadiran k JOIN users u ON u.id=k.ref_id "
+                 "WHERE k.tanggal=? AND k.ref_type='guru' AND k.status='Terlambat' "
+                 "AND u.role='guru' AND u.aktif=1", (TGL_S,)),
+     f"angka Terlambat pada kartu Guru cocok dengan DB ({kg_t})")
+must(ks_b == exp_belum("siswa"),
+     f"angka Belum Scan pada kartu Siswa cocok dengan DB ({ks_b})")
+must(kg_b == exp_belum("guru"),
+     f"angka Belum Scan pada kartu Guru cocok dengan DB ({kg_b})")
+# Daftar namanya kini ada di halaman laporan masing-masing.
+s, url, lap_s = req(admin, "/laporan/siswa")
+s, url, lap_g = req(admin, "/laporan/guru")
+must("Laporan Siswa Hari Ini" in lap_s and "20 November 2026" in lap_s,
+     "halaman /laporan/siswa: judul 'Laporan Siswa Hari Ini' + tanggal "
+     "hari ini dalam bahasa Indonesia")
+must("Laporan Guru Hari Ini" in lap_g and "20 November 2026" in lap_g,
+     "halaman /laporan/guru: judul 'Laporan Guru Hari Ini' + tanggal "
+     "hari ini dalam bahasa Indonesia")
+must("Kembali ke Dashboard" in lap_s and "Kembali ke Dashboard" in lap_g,
+     "kedua halaman laporan memuat tautan 'Kembali ke Dashboard'")
+n_st, b_st = blok_laporan(lap_s, "Siswa Terlambat")
+n_sb, b_sb = blok_laporan(lap_s, "Siswa Belum Scan")
+n_gt, b_gt = blok_laporan(lap_g, "Guru Terlambat")
+n_gb, b_gb = blok_laporan(lap_g, "Guru Belum Scan")
 must(n_st is not None and n_sb is not None and n_gt is not None and n_gb is not None,
-     "laporan memuat 4 bagian: Siswa Terlambat, Siswa Belum Scan, "
+     "halaman laporan memuat 4 bagian: Siswa Terlambat, Siswa Belum Scan, "
      "Guru Terlambat, Guru Belum Scan")
+must(n_st == ks_t and n_sb == ks_b and n_gt == kg_t and n_gb == kg_b,
+     "angka judul bagian di halaman laporan sama dengan angka pada "
+     "kartu dashboard (satu sumber data yang sama)")
 must("Siswa Lapor Telat" in b_st and "07:30" in b_st,
      "Siswa Terlambat: Siswa Lapor Telat tampil dengan jam scan 07:30")
 must("Siswa Lapor Telat" not in b_sb,
@@ -1419,8 +1486,13 @@ must(dbq("SELECT status || '/' || metode FROM kehadiran WHERE tanggal=? "
          "AND ref_type='siswa' AND ref_id=?", (TGL_S, b_r02_id)) == "Alpa/auto",
      "scan yang ditolak tidak membuat catatan Terlambat: B tetap Alpa/auto")
 s, url, dash = req(admin, "/dashboard")
-n_st2, b_st2 = blok_laporan(dash, "Siswa Terlambat")
-n_sb2, b_sb2 = blok_laporan(dash, "Siswa Belum Scan")
+ks_t2, ks_b2 = kartu_laporan(dash, "/laporan/siswa")
+must(ks_t2 == ks_t and ks_b2 == ks_b,
+     "sesudah scan 09:05 yang ditolak: angka pada kartu Siswa di "
+     "dashboard tidak berubah")
+s, url, lap_s2 = req(admin, "/laporan/siswa")
+n_st2, b_st2 = blok_laporan(lap_s2, "Siswa Terlambat")
+n_sb2, b_sb2 = blok_laporan(lap_s2, "Siswa Belum Scan")
 must("Siswa Lapor Belum" not in b_st2,
      "sesudah scan 09:05 yang ditolak: B TIDAK masuk Siswa Terlambat")
 must("Siswa Lapor Belum" in b_sb2,
@@ -1436,7 +1508,8 @@ must(n_st2 == n_st and n_sb2 == n_sb,
 #     ke nilai AWAL hari (Siswa Hadir/Terlambat/Sakit-Izin/Alpa dan Guru
 #     Hadir = 0; Siswa Belum Scan = total siswa; Guru Belum Scan = total
 #     guru aktif). Ini HANYA tampilan — catatan tidak diubah, dan panel
-#     Laporan Hari Ini di bawahnya tetap menampilkan daftar sebenarnya.
+#     Laporan Hari Ini di bawahnya tetap mengarah ke daftar sebenarnya
+#     (dua kartu kolom -> halaman /laporan/siswa & /laporan/guru).
 # (2) SCAN DITUTUP: scan pukul 09:00 ke atas untuk orang yang belum
 #     punya catatan asli hari itu DITOLAK ("Scan sudah ditutup") —
 #     berlaku di alur form biasa maupun ajax kamera — dan catatan Alpa
@@ -1560,16 +1633,23 @@ must(angka_kartu(dash, "Guru Belum Scan") == total_guru_t,
      f"{total_guru_t}")
 must("Laporan Hari Ini" in dash,
      "dashboard 09:01: panel Laporan Hari Ini tampil di bawah kartu reset")
-n_st_t, b_st_t = blok_laporan(dash, "Siswa Terlambat")
-n_gt_t, b_gt_t = blok_laporan(dash, "Guru Terlambat")
-n_sb_t, b_sb_t = blok_laporan(dash, "Siswa Belum Scan")
+must('href="/laporan/siswa"' in dash and 'href="/laporan/guru"' in dash,
+     "dashboard 09:01: panel laporan berupa dua kartu yang bisa diklik "
+     "(kolom Siswa & kolom Guru)")
+s, url, lap_s_t = req(admin, "/laporan/siswa")
+s, url, lap_g_t = req(admin, "/laporan/guru")
+n_st_t, b_st_t = blok_laporan(lap_s_t, "Siswa Terlambat")
+n_gt_t, b_gt_t = blok_laporan(lap_g_t, "Guru Terlambat")
+n_sb_t, b_sb_t = blok_laporan(lap_s_t, "Siswa Belum Scan")
 must("Siswa Reset Telat" in b_st_t and "Siswa Reset Delapan" in b_st_t,
-     "laporan 09:01 tetap riil: kedua siswa Terlambat tampil "
-     "(data TIDAK ikut di-reset)")
+     "laporan 09:01 tetap riil: kedua siswa Terlambat tampil di "
+     "halaman /laporan/siswa (data TIDAK ikut di-reset)")
 must("Guru Reset Telat" in b_gt_t,
-     "laporan 09:01 tetap riil: Guru Reset Telat tampil")
+     "laporan 09:01 tetap riil: Guru Reset Telat tampil di "
+     "halaman /laporan/guru")
 must("Siswa Reset Belum" in b_sb_t,
-     "laporan 09:01: Siswa Reset Belum tampil di Siswa Belum Scan")
+     "laporan 09:01: Siswa Reset Belum tampil di Siswa Belum Scan "
+     "halaman /laporan/siswa")
 
 # --- Senin 09:30: penolakan guru (form + ajax) & duplikat riil tetap info ---
 start_server(f"{TGL_T}T09:30:00")
@@ -1595,6 +1675,39 @@ must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
          "AND ref_id=?", (TGL_T, t03_id)) == 1,
      "Siswa Reset Belum tetap punya tepat 1 catatan (Alpa otomatis) — "
      "penolakan tidak membuat/mengubah catatan apa pun")
+
+# ===========================================================================
+# Fase U — Halaman laporan bisa dibuka SEMUA pengguna yang login (bukan
+# hanya admin): anonim diarahkan ke /login, dan guru yang login bisa
+# membuka /laporan/siswa & /laporan/guru dan melihat daftar yang sama.
+# Memakai ulang tanggal & data Fase S (Jumat 2026-11-20) yang masih ada
+# di DB uji, pada pukul 09:10 (sesudah panel laporan aktif).
+# ===========================================================================
+start_server(f"{TGL_S}T09:10:00")
+anon = client()
+s, url, hal = req(anon, "/laporan/siswa")
+must(urllib.parse.urlparse(url).path == "/login",
+     "anonim membuka /laporan/siswa -> diarahkan ke /login")
+s, url, hal = req(anon, "/laporan/guru")
+must(urllib.parse.urlparse(url).path == "/login",
+     "anonim membuka /laporan/guru -> diarahkan ke /login")
+guru_u, url, _ = login("gurulapor1", "gurulapor123")
+must(urllib.parse.urlparse(url).path == "/dashboard",
+     "guru Fase S (gurulapor1) bisa login untuk Fase U")
+s, url, lap_s_u = req(guru_u, "/laporan/siswa")
+must("Laporan Siswa Hari Ini" in lap_s_u,
+     "guru bisa membuka /laporan/siswa")
+n_st_u, b_st_u = blok_laporan(lap_s_u, "Siswa Terlambat")
+must("Siswa Lapor Telat" in b_st_u and "07:30" in b_st_u,
+     "guru melihat daftar yang sama: Siswa Lapor Telat ada di "
+     "Siswa Terlambat dengan jam 07:30")
+s, url, lap_g_u = req(guru_u, "/laporan/guru")
+must("Laporan Guru Hari Ini" in lap_g_u,
+     "guru bisa membuka /laporan/guru")
+n_gb_u, b_gb_u = blok_laporan(lap_g_u, "Guru Belum Scan")
+must("Guru Lapor Belum" in b_gb_u,
+     "guru melihat daftar yang sama: Guru Lapor Belum ada di "
+     "Guru Belum Scan")
 
 stop_server()
 if os.path.exists(DBUJI):

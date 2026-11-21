@@ -508,6 +508,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.dashboard(user, flash)
         if path == "/cari":
             return self.cari(user, qs, flash)
+        if path == "/laporan/siswa":
+            return self.laporan_siswa(user, flash)
+        if path == "/laporan/guru":
+            return self.laporan_guru(user, flash)
         if path == "/ganti-password":
             body = """<h2>Ganti Password</h2>
             <form method="post" action="/ganti-password" class="card form-card">
@@ -746,15 +750,17 @@ class Handler(BaseHTTPRequestHandler):
         {panel_laporan}"""
         return self.send_html(layout(user, "Dashboard", body, flash, aktif="dashboard"))
 
-    def _panel_laporan(self, conn, tgl):
-        """Panel 'Laporan Hari Ini' untuk dashboard mulai pukul 09:00:
-        siapa yang Terlambat dan siapa yang Belum Scan hari ini, siswa
-        dan guru terpisah. 'Belum Scan' = hanya punya catatan Alpa
-        OTOMATIS (metode 'auto'), atau belum punya catatan sama sekali.
-        Dihitung langsung dari catatan hari ini (bukan snapshot). Scan
-        sesudah 09:00 sudah ditutup (keputusan user), jadi daftar ini
-        final: yang Belum Scan tetap Belum Scan. Yang Sakit/Izin
-        tidak muncul di daftar mana pun (sudah ada keterangan)."""
+    def _data_laporan(self, conn, tgl):
+        """Data 'Laporan Hari Ini': siapa yang Terlambat dan siapa yang
+        Belum Scan hari ini, siswa dan guru terpisah. 'Belum Scan' =
+        hanya punya catatan Alpa OTOMATIS (metode 'auto'), atau belum
+        punya catatan sama sekali. Dihitung langsung dari catatan hari
+        ini (bukan snapshot). Scan sesudah 09:00 sudah ditutup
+        (keputusan user), jadi daftar ini final: yang Belum Scan tetap
+        Belum Scan. Yang Sakit/Izin tidak muncul di daftar mana pun
+        (sudah ada keterangan). Dipakai bersama oleh panel dashboard
+        (angka ringkasan pada dua kartunya) dan halaman /laporan/siswa
+        & /laporan/guru (daftar namanya), supaya definisinya sama."""
         sis_telat = conn.execute(
             """SELECT s.nama AS nama, c.nama AS sub, k.jam AS jam
                FROM kehadiran k JOIN students s ON s.id=k.ref_id
@@ -782,24 +788,80 @@ class Handler(BaseHTTPRequestHandler):
                WHERE u.role='guru' AND u.aktif=1
                      AND (k.id IS NULL OR (k.metode='auto' AND k.status='Alpa'))
                ORDER BY u.nama""", (tgl,)).fetchall()
+        return {"sis_telat": sis_telat, "sis_belum": sis_belum,
+                "gur_telat": gur_telat, "gur_belum": gur_belum}
 
-        def bagian(judul, baris, pakai_jam):
-            isi = "".join(
-                f'<li><span class="no">{i}.</span> <b>{esc(r["nama"])}</b> '
-                f'<span class="muted">{esc(r["sub"] or "")}</span>'
-                + (f' <span class="jam">{esc(r["jam"] or "")}</span>' if pakai_jam else "")
-                + "</li>"
-                for i, r in enumerate(baris, 1))
-            isi = isi or '<li class="muted">Tidak ada.</li>'
-            return (f"<h4>{esc(judul)} ({len(baris)})</h4>"
-                    f'<ul class="plain-list">{isi}</ul>')
+    @staticmethod
+    def _bagian_laporan(judul, baris, pakai_jam):
+        """Satu bagian daftar laporan: judul + jumlahnya, lalu daftar
+        bernomor (nama, keterangan, dan jam scan untuk yang Terlambat);
+        bagian kosong menampilkan 'Tidak ada.'."""
+        isi = "".join(
+            f'<li><span class="no">{i}.</span> <b>{esc(r["nama"])}</b> '
+            f'<span class="muted">{esc(r["sub"] or "")}</span>'
+            + (f' <span class="jam">{esc(r["jam"] or "")}</span>' if pakai_jam else "")
+            + "</li>"
+            for i, r in enumerate(baris, 1))
+        isi = isi or '<li class="muted">Tidak ada.</li>'
+        return (f"<h4>{esc(judul)} ({len(baris)})</h4>"
+                f'<ul class="plain-list">{isi}</ul>')
+
+    def _panel_laporan(self, conn, tgl):
+        """Panel 'Laporan Hari Ini' untuk dashboard mulai pukul 09:00:
+        DUA kartu yang bisa diklik — kolom Siswa dan kolom Guru —
+        masing-masing hanya memuat angka ringkasan hari ini (Terlambat
+        & Belum Scan, dari _data_laporan). Daftar namanya TIDAK tampil
+        di dashboard; dibuka lewat tautan kartunya: /laporan/siswa
+        dan /laporan/guru."""
+        d = self._data_laporan(conn, tgl)
+
+        def kartu(href, nama, telat, belum):
+            return (f'<a class="laporan-card" href="{href}">'
+                    f'<span class="laporan-nama">{esc(nama)}</span>'
+                    f'<span class="laporan-baris">Terlambat: <b>{telat}</b></span>'
+                    f'<span class="laporan-baris">Belum Scan: <b>{belum}</b></span>'
+                    '<span class="laporan-klik">Klik untuk lihat daftar '
+                    '&rarr;</span></a>')
 
         return ('<section class="card laporan"><h3>Laporan Hari Ini</h3>'
-                + bagian("Siswa Terlambat", sis_telat, True)
-                + bagian("Siswa Belum Scan", sis_belum, False)
-                + bagian("Guru Terlambat", gur_telat, True)
-                + bagian("Guru Belum Scan", gur_belum, False)
-                + "</section>")
+                '<div class="laporan-grid">'
+                + kartu("/laporan/siswa", "Siswa",
+                        len(d["sis_telat"]), len(d["sis_belum"]))
+                + kartu("/laporan/guru", "Guru",
+                        len(d["gur_telat"]), len(d["gur_belum"]))
+                + "</div></section>")
+
+    def laporan_siswa(self, user, flash):
+        return self._halaman_laporan(user, flash, "siswa")
+
+    def laporan_guru(self, user, flash):
+        return self._halaman_laporan(user, flash, "guru")
+
+    def _halaman_laporan(self, user, flash, tipe):
+        """Halaman daftar Laporan Hari Ini (dari kartu panel dashboard):
+        dua bagian bernomor Terlambat & Belum Scan untuk siswa ATAU
+        guru, khusus HARI INI. pastikan_alpa dipanggil dulu supaya
+        daftar Belum Scan lengkap walau halaman dibuka langsung."""
+        now = waktu_sekarang()
+        today = now.date()
+        tgl = today.strftime("%Y-%m-%d")
+        conn = db()
+        pastikan_alpa(conn, tgl)
+        d = self._data_laporan(conn, tgl)
+        conn.close()
+        if tipe == "siswa":
+            judul = "Laporan Siswa Hari Ini"
+            isi = (self._bagian_laporan("Siswa Terlambat", d["sis_telat"], True)
+                   + self._bagian_laporan("Siswa Belum Scan", d["sis_belum"], False))
+        else:
+            judul = "Laporan Guru Hari Ini"
+            isi = (self._bagian_laporan("Guru Terlambat", d["gur_telat"], True)
+                   + self._bagian_laporan("Guru Belum Scan", d["gur_belum"], False))
+        body = f"""<h2>{esc(judul)}</h2>
+        <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))}</p>
+        <section class="card laporan">{isi}</section>
+        <p><a href="/dashboard">Kembali ke Dashboard</a></p>"""
+        return self.send_html(layout(user, judul, body, flash, aktif="dashboard"))
 
     # -- scan gerbang -----------------------------------------------------------
     def _kedatangan_hari_ini(self, conn, tgl):
