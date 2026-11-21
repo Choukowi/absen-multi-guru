@@ -1877,6 +1877,54 @@ must(dbqf(DBW, "SELECT value FROM settings WHERE key='warna_menu'") == "#334155"
      "backup (ZIP) memuat warna menu di tabel settings")
 os.remove(DBW)
 
+# ===========================================================================
+# Fase X — Pemilih warna kustom Pengaturan Tampilan (warna latar & warna
+# menu): swatch ".kustom" berisi radio tersembunyi "kustom" + color picker.
+# Mengetuk picker TIDAK mencentang radio itu (browser tidak meneruskan klik
+# elemen interaktif di dalam <label> ke radio), jadi warna pilihan picker
+# tidak pernah diterapkan — dilaporkan user dari iPhone. Perbaikan di
+# app.js: picker pada "input"/"change" mencentang radio saudara, dan pada
+# "change" formulir langsung dikirim. Suite HTTP tidak menjalankan JS ->
+# cakupan statis pada isi app.js yang disajikan + teks petunjuk halaman
+# tampilan + regresi server bahwa posting kustom tetap menyimpan warna.
+# ===========================================================================
+s, headers, js_bytes = req_bytes(admin, "/static/app.js")
+js_x = js_bytes.decode("utf-8", "replace")
+must('.swatch.kustom input[type="color"]' in js_x,
+     "app.js memuat penanganan pemilih warna .swatch.kustom")
+must("addEventListener('input'" in js_x
+     and "addEventListener('change'" in js_x,
+     "app.js mendengarkan peristiwa input & change pada pemilih warna")
+must("radio.checked = true" in js_x,
+     "app.js mencentang radio 'kustom' saat warna dipilih dari picker")
+must("requestSubmit" in js_x
+     and "HTMLFormElement.prototype.submit.call" in js_x,
+     "app.js mengirim formulir pada change (requestSubmit, cadangan "
+     "submit prototipe — string 'form.submit()' tetap dilarang oleh Fase J)")
+must("pw-toggle" in js_x and "catatKode" in js_x,
+     "app.js tetap memuat toggle mata password & logika scan gerbang")
+
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+must("pilih radio terakhir" not in hal_tampilan,
+     "petunjuk halaman tampilan tidak lagi menyuruh memilih radio manual")
+must("langsung diterapkan" in hal_tampilan
+     and "begitu dipilih" in hal_tampilan,
+     "petunjuk halaman tampilan: warna kustom langsung diterapkan "
+     "begitu dipilih")
+
+# Regresi server: posting kustom untuk KEDUA pemilih tetap menyimpan warna.
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "kustom", "warna_menu_custom": "#123abc"})
+must("Warna menu disimpan." in hasil
+     and setting_w("warna_menu") == "#123abc",
+     "posting warna_menu=kustom dengan #123abc tetap tersimpan")
+s, url, hasil = req(admin, "/admin/tampilan",
+                    {"nama_sekolah": setting_w("nama_sekolah") or "",
+                     "bg_color": "kustom", "bg_color_custom": "#123abc"})
+must("Pengaturan tampilan disimpan." in hasil
+     and setting_w("bg_color") == "#123abc",
+     "posting bg_color=kustom dengan #123abc tetap tersimpan")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)

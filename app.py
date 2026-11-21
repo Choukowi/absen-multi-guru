@@ -2206,8 +2206,9 @@ def _admin_tampilan(self, user, flash):
           <input type="color" name="bg_color_custom" value="{esc(peng['bg_color'])}">
         </label>
       </div>
-      <p class="muted"><small>Pilih warna contoh, atau pilih radio terakhir lalu
-      tentukan warna kustom dengan pemilih warna.</small></p>
+      <p class="muted"><small>Pilih warna contoh lalu Simpan, atau pakai
+      pemilih warna di ujung kanan &mdash; warna kustom langsung diterapkan
+      begitu dipilih.</small></p>
       <button type="submit" class="btn btn-primary">Simpan Pengaturan</button></form></div>
     <div class="card form-card"><h3>Warna Menu</h3>
     <p class="muted">Warna panel menu: menu samping di komputer, bilah atas,
@@ -2222,8 +2223,9 @@ def _admin_tampilan(self, user, flash):
           <input type="color" name="warna_menu_custom" value="{esc(menu_ini)}">
         </label>
       </div>
-      <p class="muted"><small>Pilih warna contoh, atau pilih radio terakhir lalu
-      tentukan warna kustom dengan pemilih warna.</small></p>
+      <p class="muted"><small>Pilih warna contoh lalu Simpan, atau pakai
+      pemilih warna di ujung kanan &mdash; warna kustom langsung diterapkan
+      begitu dipilih.</small></p>
       <button type="submit" class="btn btn-primary">Simpan Warna Menu</button></form></div>
     <div class="card form-card"><h3>Wallpaper Sekolah</h3>
     <p class="muted">Gambar menjadi latar seluruh aplikasi (termasuk halaman login),
