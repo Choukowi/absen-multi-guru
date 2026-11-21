@@ -385,6 +385,11 @@ table.tabel.kelola td.aksi { white-space: nowrap; }
 .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .auth-brand .brand-name { font-size: 1.25rem; }
 .auth-card h2 { margin-top: 4px; }
+/* Kartu kedua halaman login: Login Wali Kelas (wali memilih kelasnya +
+   password, tanpa username). Memakai komponen .auth-card yang sama —
+   termasuk perlakuan tema pastel — hanya diberi aksen garis atas agar
+   kedua login mudah dibedakan sekilas. */
+.auth-card-wali { border-top: 4px solid var(--indigo); }
 .auth-foot { color: #344054; text-align: center; font-size: .88rem; margin: 0;
   font-weight: 650; }
 
