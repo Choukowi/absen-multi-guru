@@ -223,12 +223,7 @@ ul.arrivals .jam { margin-left: auto; font-variant-numeric: tabular-nums; font-w
   .laporan-grid { grid-template-columns: 1fr; }
 }
 
-/* ---------- Klaster ikon sekolah & kehadiran per kelas ---------- */
-.ikon-tema-cluster { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
-.ikon-tema { display: inline-flex; align-items: center; justify-content: center;
-  width: 34px; height: 34px; border-radius: 10px; background: #eef1f8;
-  color: var(--muted); opacity: .8; }
-.ikon-tema svg { width: 19px; height: 19px; }
+/* ---------- Ikon sekolah & kehadiran per kelas ---------- */
 .kelas-card h3 { display: flex; align-items: center; gap: 8px; margin-top: 0; }
 .kelas-card h3 svg { width: 21px; height: 21px; color: var(--indigo); flex: 0 0 auto; }
 .kelas-row { display: flex; align-items: center; gap: 12px; padding: 7px 0; }
@@ -282,6 +277,13 @@ table.tabel .kosong { color: #b6bdcc; }
 table.tabel td.tot, table.tabel th.tot { font-weight: 700; background: #fbfcfe; width: 34px; }
 table.tabel tr.total-row td { background: #eef1fb; font-weight: 650; border-top: 2px solid var(--garis); }
 table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
+
+/* ---------- Tabel kelola (daftar admin: siswa, guru, kelas) ---------- */
+table.tabel.kelola th, table.tabel.kelola td { text-align: left; }
+table.tabel.kelola th.no, table.tabel.kelola td.no { text-align: center; }
+table.tabel.kelola tbody tr:nth-child(even) { background: #fafbfe; }
+table.tabel.kelola tbody tr:hover { background: #f7f9ff; }
+table.tabel.kelola td.aksi { white-space: nowrap; }
 .empty-state { text-align: center; padding: 32px 16px; color: var(--muted); }
 .empty-state svg { width: 40px; height: 40px; opacity: .45; }
 .empty-state p { margin: 8px 0 2px; font-weight: 650; color: #475467; }
@@ -526,21 +528,6 @@ body.tema-langit .stat-card:nth-child(4n), body.tema-lilac .stat-card:nth-child(
 body.tema-krem .stat-card:nth-child(4n) { background: var(--tema-tint4); }
 body.tema-pastel-pink h2, body.tema-mint h2, body.tema-langit h2,
 body.tema-lilac h2, body.tema-krem h2 { color: var(--tema-teks-aksen); }
-body.tema-pastel-pink .ikon-tema, body.tema-mint .ikon-tema,
-body.tema-langit .ikon-tema, body.tema-lilac .ikon-tema,
-body.tema-krem .ikon-tema { opacity: 1; color: var(--tema-teks-aksen); }
-body.tema-pastel-pink .ikon-tema:nth-child(4n+1), body.tema-mint .ikon-tema:nth-child(4n+1),
-body.tema-langit .ikon-tema:nth-child(4n+1), body.tema-lilac .ikon-tema:nth-child(4n+1),
-body.tema-krem .ikon-tema:nth-child(4n+1) { background: var(--tema-tint1); }
-body.tema-pastel-pink .ikon-tema:nth-child(4n+2), body.tema-mint .ikon-tema:nth-child(4n+2),
-body.tema-langit .ikon-tema:nth-child(4n+2), body.tema-lilac .ikon-tema:nth-child(4n+2),
-body.tema-krem .ikon-tema:nth-child(4n+2) { background: var(--tema-tint2); }
-body.tema-pastel-pink .ikon-tema:nth-child(4n+3), body.tema-mint .ikon-tema:nth-child(4n+3),
-body.tema-langit .ikon-tema:nth-child(4n+3), body.tema-lilac .ikon-tema:nth-child(4n+3),
-body.tema-krem .ikon-tema:nth-child(4n+3) { background: var(--tema-tint3); }
-body.tema-pastel-pink .ikon-tema:nth-child(4n), body.tema-mint .ikon-tema:nth-child(4n),
-body.tema-langit .ikon-tema:nth-child(4n), body.tema-lilac .ikon-tema:nth-child(4n),
-body.tema-krem .ikon-tema:nth-child(4n) { background: var(--tema-tint4); }
 body.tema-pastel-pink .kelas-card h3 svg, body.tema-mint .kelas-card h3 svg,
 body.tema-langit .kelas-card h3 svg, body.tema-lilac .kelas-card h3 svg,
 body.tema-krem .kelas-card h3 svg { color: var(--tema-aksen); }
