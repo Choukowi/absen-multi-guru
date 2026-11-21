@@ -203,3 +203,55 @@
     pasangSemua();
   }
 })();
+
+// ---------------------------------------------------------------------------
+// Pemilih warna kustom di Pengaturan Tampilan: swatch ".kustom" berisi radio
+// tersembunyi (value "kustom") + <input type="color"> yang terlihat. Mengetuk
+// color picker TIDAK mencentang radio itu — browser tidak meneruskan klik
+// pada elemen interaktif di dalam <label> ke radio — jadi warna hasil picker
+// tidak pernah terkirim (form mengirim preset yang masih tercentang).
+// Blok ini memperbaikinya: pada "input" dan "change" picker, radio saudara
+// di label yang sama dicentang; pada "change" formulir langsung dikirim,
+// jadi warna kustom terterap begitu dipilih, tanpa perlu mencari radio atau
+// menekan Simpan. Menekan Simpan manual sesudah memilih juga tetap
+// berfungsi, karena radio sudah tercentang oleh penangan "input".
+// Blok ini BERDIRI SENDIRI: hanya menyentuh .swatch.kustom, tidak mengubah
+// perilaku blok scan QR maupun toggle mata password.
+// ---------------------------------------------------------------------------
+(function () {
+  function pasangPicker(picker) {
+    var label = picker.closest ? picker.closest('label.swatch.kustom') : null;
+    if (!label) {
+      var el = picker.parentNode;
+      while (el && !(el.tagName === 'LABEL' &&
+                     (' ' + el.className + ' ').indexOf(' kustom ') >= 0)) {
+        el = el.parentNode;
+      }
+      label = el;
+    }
+    if (!label) return;
+    var radio = label.querySelector('input[type="radio"]');
+    if (!radio) return;
+    function centangRadio() { radio.checked = true; }
+    picker.addEventListener('input', centangRadio);
+    picker.addEventListener('change', function () {
+      centangRadio();
+      var form = picker.form || (label.closest ? label.closest('form') : null);
+      if (!form) return;
+      if (typeof form.requestSubmit === 'function') form.requestSubmit();
+      else HTMLFormElement.prototype.submit.call(form);
+    });
+  }
+
+  function pasangSemua() {
+    var pickers = document.querySelectorAll(
+      '.swatch.kustom input[type="color"]');
+    for (var i = 0; i < pickers.length; i++) pasangPicker(pickers[i]);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', pasangSemua);
+  } else {
+    pasangSemua();
+  }
+})();
