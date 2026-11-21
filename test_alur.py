@@ -1763,6 +1763,120 @@ must("Guru Lapor Belum" in b_gb_u,
      "guru melihat daftar yang sama: Guru Lapor Belum ada di "
      "Guru Belum Scan")
 
+# ===========================================================================
+# Fase W — Warna Menu: panel navigasi (sidebar desktop, bilah atas &
+# menu bawah mobile) punya pengaturan warna SENDIRI di Pengaturan
+# Tampilan (kunci settings 'warna_menu'), terpisah dari warna latar
+# halaman (bg_color). Belum dipilih -> tidak ada penimpa apa pun
+# (tampilan bawaan menu putih). Nilai tidak sah ditolak tanpa mengubah
+# pengaturan; guru tidak boleh mengubah; teks menu dihitung dari
+# luminansi agar tetap terbaca; warna ikut tersimpan di backup (tabel
+# settings tercakup salinan DB utuh — dibuktikan dari isi ZIP).
+# ===========================================================================
+start_server("2026-11-16T08:00:00")
+admin, url, _ = login("admin", "admin123")
+guru, url, _ = login("guruuji", "guruuji123")
+
+
+def setting_w(key):
+    conn = sqlite3.connect(DBUJI)
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key=?",
+                           (key,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+must(setting_w("warna_menu") is None,
+     "warna menu belum pernah diatur: kunci warna_menu belum ada di settings")
+s, url, dash = req(admin, "/dashboard")
+must("--warna-menu" not in dash and "menu-kustom" not in dash,
+     "tanpa warna menu: halaman tidak memuat penimpa warna menu apa pun "
+     "(tampilan bawaan dipertahankan)")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+must("Warna Menu" in hal_tampilan
+     and 'action="/admin/tampilan/warna-menu"' in hal_tampilan,
+     "Pengaturan Tampilan memuat bagian Warna Menu dengan form-nya sendiri")
+
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "#334155"})
+must("Warna menu disimpan." in hasil, "simpan warna menu preset berhasil")
+must(setting_w("warna_menu") == "#334155",
+     "warna menu #334155 tersimpan di settings")
+s, url, dash = req(admin, "/dashboard")
+must("--warna-menu:#334155" in dash and 'class="menu-kustom"' in dash,
+     "dashboard memuat variabel --warna-menu dan kelas menu-kustom "
+     "(sidebar memakai warna pilihan)")
+must("--teks-menu:#ffffff" in dash,
+     "warna menu gelap -> teks menu dihitung putih agar terbaca")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+must('name="warna_menu" value="#334155" checked' in hal_tampilan,
+     "halaman tampilan menandai swatch warna menu yang sedang aktif")
+
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "bukan-warna"})
+must("Warna menu tidak valid" in hasil,
+     "nilai warna menu tidak sah ditolak dengan pesan jelas")
+must(setting_w("warna_menu") == "#334155",
+     "nilai tidak sah tidak mengubah warna menu tersimpan")
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "kustom", "warna_menu_custom": "#12345"})
+must("Warna menu tidak valid" in hasil
+     and setting_w("warna_menu") == "#334155",
+     "warna kustom tidak sah (5 digit) juga ditolak, pengaturan utuh")
+
+try:
+    req(guru, "/admin/tampilan/warna-menu", {"warna_menu": "#123abc"})
+    must(False, "guru mengubah warna menu harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "guru POST warna menu -> 404")
+must(setting_w("warna_menu") == "#334155",
+     "percobaan guru tidak mengubah warna menu")
+
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "kustom", "warna_menu_custom": "#FEF3C7"})
+must("Warna menu disimpan." in hasil
+     and setting_w("warna_menu") == "#fef3c7",
+     "warna menu kustom dari color picker tersimpan (dinormalkan huruf kecil)")
+s, url, dash = req(admin, "/dashboard")
+must("--warna-menu:#fef3c7" in dash and "--teks-menu:#1c2333" in dash,
+     "warna menu terang -> teks menu dihitung gelap agar terbaca")
+
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "#ffffff"})
+must("Warna menu disimpan." in hasil
+     and setting_w("warna_menu") == "#ffffff",
+     "memilih Putih #ffffff tersimpan bersih sebagai warna menu")
+s, url, dash = req(admin, "/dashboard")
+must("--warna-menu:#ffffff" in dash and "--teks-menu:#1c2333" in dash,
+     "warna menu putih terpasang dengan teks gelap")
+
+# Kemandirian dua arah: warna latar dan warna menu tidak saling mengubah.
+s, url, hasil = req(admin, "/admin/tampilan",
+                    {"nama_sekolah": setting_w("nama_sekolah") or "",
+                     "bg_color": "#e0f2fe", "bg_color_custom": "#e0f2fe"})
+must("Pengaturan tampilan disimpan." in hasil, "ganti warna latar berhasil")
+s, url, dash = req(admin, "/dashboard")
+must("background-color:#e0f2fe" in dash and "--warna-menu:#ffffff" in dash,
+     "mengubah warna latar tidak mengubah warna menu")
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "#334155"})
+must("Warna menu disimpan." in hasil, "ganti warna menu lagi berhasil")
+s, url, dash = req(admin, "/dashboard")
+must("--warna-menu:#334155" in dash and "background-color:#e0f2fe" in dash,
+     "mengubah warna menu tidak mengubah warna latar")
+
+# Warna menu ikut di backup: ZIP berisi salinan DB utuh termasuk settings.
+st, hdr, zipdata = req_bytes(admin, "/admin/backup/unduh")
+zf_w = zipfile.ZipFile(io.BytesIO(zipdata))
+DBW = "/tmp/absen-uji-w.db"
+with open(DBW, "wb") as fh:
+    fh.write(zf_w.read("absen.db"))
+must(dbqf(DBW, "SELECT value FROM settings WHERE key='warna_menu'") == "#334155",
+     "backup (ZIP) memuat warna menu di tabel settings")
+os.remove(DBW)
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)

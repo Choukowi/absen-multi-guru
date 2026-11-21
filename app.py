@@ -354,6 +354,7 @@ def layout(user, title, body, flash="", aktif=""):
 {flash_html}{body}</div>
 <p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
 </div><script src="/static/app.js"></script></body></html>"""
+    menu_style, menu_cls = gaya_menu(peng)
     items = nav_items(user)
     sidenav = "".join(
         f'<a class="nav-item{" aktif" if k == aktif else ""}" href="{href}">'
@@ -372,8 +373,8 @@ def layout(user, title, body, flash="", aktif=""):
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} - {esc(nama_app)}</title>
-<link rel="stylesheet" href="/static/style.css"></head>
-<body{bg_style}>{wp_layer}<div class="shell">
+<link rel="stylesheet" href="/static/style.css">{menu_style}</head>
+<body{menu_cls}{bg_style}>{wp_layer}<div class="shell">
 <aside class="sidebar">
 <div class="brand">{brand_mark(peng)}
 <span class="brand-name">{esc(nama_app)}</span></div>
@@ -611,6 +612,8 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/admin/siswa/") and path.endswith("/hapus"):
                 return self.post_admin_siswa_hapus(int(path.split("/")[3]))
             if path == "/admin/tampilan": return self.post_admin_tampilan(f)
+            if path == "/admin/tampilan/warna-menu":
+                return self.post_admin_tampilan_warna_menu(f)
             if path == "/admin/tampilan/wallpaper/hapus":
                 return self.post_admin_tampilan_wallpaper_hapus()
             if path == "/admin/tampilan/logo/hapus":
@@ -1565,6 +1568,50 @@ class Handler(BaseHTTPRequestHandler):
 BG_PRESETS = ["#f3f5fb", "#ffffff", "#e6f4ea", "#fdeee3",
               "#ece7f7", "#e0f2fe", "#fef3c7", "#334155"]
 BG_DEFAULT = "#f3f5fb"
+# Warna menu (sidebar/topbar/nav bawah) punya pengaturan SENDIRI, terpisah
+# dari warna latar halaman: kunci settings 'warna_menu'. Kosong = tampilan
+# bawaan (menu putih). Preset diawali Putih sebagai pilihan bawaan/reset.
+MENU_PRESETS = ["#ffffff"] + [w for w in BG_PRESETS if w != "#ffffff"]
+TEKS_MENU_GELAP = "#1c2333"  # teks di atas warna menu yang terang (= --teks)
+
+
+def _rgb_hex(hexs):
+    return tuple(int(hexs[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _luminansi_hex(hexs):
+    """Luminansi relatif (WCAG) 0..1 dari warna #rrggbb."""
+    def lin(c):
+        c = c / 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = _rgb_hex(hexs)
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def teks_di_atas(warna):
+    """Warna teks yang terbaca di atas bidang `warna`: putih atau teks
+    gelap aplikasi, dipilih yang kontras luminansinya lebih baik."""
+    lum = _luminansi_hex(warna)
+    kontras_putih = 1.05 / (lum + 0.05)
+    kontras_gelap = (lum + 0.05) / (_luminansi_hex(TEKS_MENU_GELAP) + 0.05)
+    return "#ffffff" if kontras_putih >= kontras_gelap else TEKS_MENU_GELAP
+
+
+def gaya_menu(peng):
+    """(blok <style> variabel warna menu, kelas body) untuk layout().
+
+    Hanya bila admin sudah memilih warna menu; belum dipilih -> ("", "")
+    sehingga tampilan bawaan tidak berubah sama sekali."""
+    warna = (peng.get("warna_menu") or "").strip().lower()
+    if not re.match(r"^#[0-9a-f]{6}$", warna):
+        return "", ""
+    teks = teks_di_atas(warna)
+    r, g, b = _rgb_hex(teks)
+    style = (f"<style>:root{{--warna-menu:{warna};--teks-menu:{teks};"
+             f"--teks-menu-redup:rgba({r},{g},{b},.72);"
+             f"--menu-hover:rgba({r},{g},{b},.12);"
+             f"--menu-aktif:rgba({r},{g},{b},.25);}}</style>")
+    return style, ' class="menu-kustom"'
 UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
 WALLPAPER_EXT = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                  ".png": "image/png", ".webp": "image/webp"}
@@ -1573,7 +1620,8 @@ WALLPAPER_NAMA_RE = re.compile(r"^[0-9a-f]{24}\.(jpg|jpeg|png|webp)$")
 
 def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
-    peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": ""}
+    peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": "",
+            "warna_menu": ""}
     try:
         conn = db()
         for r in conn.execute("SELECT key, value FROM settings").fetchall():
@@ -1584,6 +1632,8 @@ def get_pengaturan():
         pass
     if not re.match(r"^#[0-9a-fA-F]{6}$", peng["bg_color"] or ""):
         peng["bg_color"] = BG_DEFAULT
+    if peng["warna_menu"] and not re.match(r"^#[0-9a-fA-F]{6}$", peng["warna_menu"]):
+        peng["warna_menu"] = ""
     if peng["wallpaper"] and not WALLPAPER_NAMA_RE.match(peng["wallpaper"]):
         peng["wallpaper"] = ""
     if peng["logo"] and not WALLPAPER_NAMA_RE.match(peng["logo"]):
@@ -2119,6 +2169,16 @@ def _admin_tampilan(self, user, flash):
                      f'<input type="radio" name="bg_color" value="{warna}"{cek}>'
                      f'<span style="background:{warna}"></span></label>')
     cek_kustom = "" if peng["bg_color"].lower() in [w.lower() for w in BG_PRESETS] else " checked"
+    # Warna menu: tampilkan Putih sebagai pilihan tercentang selama belum
+    # pernah dipilih (kosong = bawaan putih, belum tersimpan apa pun).
+    menu_ini = peng["warna_menu"].lower() or "#ffffff"
+    swatches_menu = ""
+    for warna in MENU_PRESETS:
+        cek = " checked" if menu_ini == warna.lower() else ""
+        swatches_menu += (f'<label class="swatch" title="{warna}">'
+                          f'<input type="radio" name="warna_menu" value="{warna}"{cek}>'
+                          f'<span style="background:{warna}"></span></label>')
+    cek_menu_kustom = "" if menu_ini in [w.lower() for w in MENU_PRESETS] else " checked"
     wp_html = ""
     if peng["wallpaper"]:
         wp_html = f"""<div class="wp-preview"><img src="/wallpaper/{esc(peng['wallpaper'])}"
@@ -2149,6 +2209,22 @@ def _admin_tampilan(self, user, flash):
       <p class="muted"><small>Pilih warna contoh, atau pilih radio terakhir lalu
       tentukan warna kustom dengan pemilih warna.</small></p>
       <button type="submit" class="btn btn-primary">Simpan Pengaturan</button></form></div>
+    <div class="card form-card"><h3>Warna Menu</h3>
+    <p class="muted">Warna panel menu: menu samping di komputer, bilah atas,
+    dan menu bawah di HP. Terpisah dari warna latar halaman di atas &mdash;
+    mengubah yang satu tidak mengubah yang lain. Pilih Putih untuk tampilan
+    bawaan. Warna teks menu menyesuaikan otomatis agar tetap terbaca.</p>
+    <form method="post" action="/admin/tampilan/warna-menu">
+      <label>Warna panel menu</label>
+      <div class="swatches">{swatches_menu}
+        <label class="swatch kustom" title="Warna kustom">
+          <input type="radio" name="warna_menu" value="kustom"{cek_menu_kustom}>
+          <input type="color" name="warna_menu_custom" value="{esc(menu_ini)}">
+        </label>
+      </div>
+      <p class="muted"><small>Pilih warna contoh, atau pilih radio terakhir lalu
+      tentukan warna kustom dengan pemilih warna.</small></p>
+      <button type="submit" class="btn btn-primary">Simpan Warna Menu</button></form></div>
     <div class="card form-card"><h3>Wallpaper Sekolah</h3>
     <p class="muted">Gambar menjadi latar seluruh aplikasi (termasuk halaman login),
     di balik lapisan terang agar teks tetap terbaca. Format JPG/PNG/WebP, maks &plusmn;5 MB.
@@ -2182,6 +2258,20 @@ def _post_admin_tampilan(self, f):
     set_pengaturan(conn, "nama_sekolah", (f.get("nama_sekolah") or "").strip())
     conn.commit(); conn.close()
     return self.redirect("/admin/tampilan", "Pengaturan tampilan disimpan.")
+
+
+def _post_admin_tampilan_warna_menu(self, f):
+    warna = (f.get("warna_menu") or "").strip()
+    if warna == "kustom":
+        warna = (f.get("warna_menu_custom") or "").strip()
+    if not re.match(r"^#[0-9a-fA-F]{6}$", warna):
+        # Nilai tidak sah: ditolak, pengaturan lama tidak berubah.
+        return self.redirect("/admin/tampilan",
+                             "Warna menu tidak valid; pengaturan tidak berubah.")
+    conn = db()
+    set_pengaturan(conn, "warna_menu", warna.lower())
+    conn.commit(); conn.close()
+    return self.redirect("/admin/tampilan", "Warna menu disimpan.")
 
 
 def _post_admin_tampilan_wallpaper(self):
@@ -2472,6 +2562,7 @@ Handler.post_admin_siswa_edit = _post_admin_siswa_edit
 Handler.post_admin_siswa_hapus = _post_admin_siswa_hapus
 Handler.admin_tampilan = _admin_tampilan
 Handler.post_admin_tampilan = _post_admin_tampilan
+Handler.post_admin_tampilan_warna_menu = _post_admin_tampilan_warna_menu
 Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
 Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
 Handler.wallpaper_file = _wallpaper_file
