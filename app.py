@@ -318,8 +318,8 @@ def icon(name):
 
 # Ikon sekolah gambar tangan (gaya gores, mengikuti warna teks lewat
 # currentColor sehingga ikut berubah mengikuti tema): siswa dan alat
-# tulis/perlengkapan sekolah. Dipakai klaster dekoratif dashboard, kartu
-# statistik, kartu per kelas, dan keadaan kosong.
+# tulis/perlengkapan sekolah. Dipakai kartu statistik, kartu per kelas,
+# dan keadaan kosong.
 IKON_TEMA = {
     "siswa": _svg('<circle cx="12" cy="7.8" r="3.4"/>'
                   '<path d="M5 20.6c.9-3.9 3.6-5.9 7-5.9s6.1 2 7 5.9"/>'),
@@ -583,6 +583,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.dashboard(user, flash)
         if path == "/cari":
             return self.cari(user, qs, flash)
+        if path.startswith("/siswa/") and path.split("/")[2].isdigit():
+            return self.siswa_detail(user, int(path.split("/")[2]), flash)
         if path == "/laporan/siswa":
             return self.laporan_siswa(user, flash)
         if path == "/laporan/guru":
@@ -837,11 +839,6 @@ class Handler(BaseHTTPRequestHandler):
             kartu_kelas = (
                 '<section class="card kelas-card"><h3>' + ikon_tema("buku")
                 + ' Kehadiran per Kelas Hari Ini</h3>' + baris_kelas + "</section>")
-        # Klaster ikon sekolah dekoratif di kepala dashboard (redup pada
-        # tema bawaan, berwarna mengikuti palet pada tema pastel).
-        cluster = "".join(
-            f'<span class="ikon-tema">{ikon_tema(n)}</span>'
-            for n in ("siswa", "pensil", "buku", "tas", "penggaris", "jam"))
         items = "".join(
             f'<li><span class="pill p-{r["status"].lower()}">{esc(r["status"])}</span> '
             f'<b>{esc(r["nama"])}</b> <span class="muted">{esc(r["sub"] or "")}</span> '
@@ -861,7 +858,6 @@ class Handler(BaseHTTPRequestHandler):
         body = f"""<h2>Dashboard</h2>
         <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))} &bull;
         batas Hadir {JAM_BATAS_HADIR.strftime('%H:%M')}, Alpa otomatis {JAM_BATAS_ALPA.strftime('%H:%M')}</p>
-        <div class="ikon-tema-cluster" aria-hidden="true">{cluster}</div>
         {warn}<div class="card search-card">
           <form method="get" action="/cari" class="search-form">
             <label class="search-label">Pencarian
@@ -1878,24 +1874,37 @@ def _cari(self, user, qs, flash):
         items = ""
         for i, r in enumerate(siswa_rows):
             if admin:
-                tautan = (f' &mdash; <a href="/admin/kelas/{r["class_id"]}">Lihat Kelas</a>'
+                tautan = (f'<a href="/siswa/{r["id"]}">Detail</a> '
+                          f'&mdash; <a href="/admin/kelas/{r["class_id"]}">Lihat Kelas</a>'
                           f' &mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a>')
             else:
-                tautan = f' &mdash; <a href="/tabel-siswa?kelas={r["class_id"]}">Lihat Kelas</a>'
-            items += (f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
-                      f'&mdash; NIS: <code>{esc(r["kode"])}</code> '
-                      f'&mdash; {esc(r["kelas"])}{tautan}</li>')
-        bagian += f'<div class="card"><h3>Siswa</h3><ul class="plain-list">{items}</ul></div>'
+                tautan = (f'<a href="/siswa/{r["id"]}">Detail</a> '
+                          f'&mdash; <a href="/tabel-siswa?kelas={r["class_id"]}">Lihat Kelas</a>')
+            items += (f'<tr><td class="no">{i + 1}</td>'
+                      f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
+                      f'<td><code>{esc(r["kode"])}</code></td>'
+                      f'<td>{esc(r["kelas"])}</td>'
+                      f'<td class="aksi">{tautan}</td></tr>')
+        bagian += ('<div class="card"><h3>Siswa</h3><div class="table-scroll">'
+                   '<table class="tabel kelola"><thead><tr><th class="no">No</th>'
+                   '<th class="nama">Nama</th><th>NIS</th><th>Kelas</th><th>Aksi</th>'
+                   f'</tr></thead><tbody>{items}</tbody></table></div></div>')
     if guru_rows:
         items = ""
         for i, r in enumerate(guru_rows):
-            tautan = (f' &mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a>'
+            tautan = (f'<a href="/admin/guru/{r["id"]}/edit">Edit</a>'
                       if admin else "")
-            items += (f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
-                      f'&mdash; {esc(r["mapel"] or "—")} '
-                      f'&mdash; username: <code>{esc(r["username"])}</code> '
-                      f'&mdash; kode QR: <code>{esc(r["kode_qr"] or "-")}</code>{tautan}</li>')
-        bagian += f'<div class="card"><h3>Guru</h3><ul class="plain-list">{items}</ul></div>'
+            items += (f'<tr><td class="no">{i + 1}</td>'
+                      f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
+                      f'<td>{esc(r["mapel"] or "—")}</td>'
+                      f'<td><code>{esc(r["username"])}</code></td>'
+                      f'<td><code>{esc(r["kode_qr"] or "-")}</code></td>'
+                      f'<td class="aksi">{tautan}</td></tr>')
+        bagian += ('<div class="card"><h3>Guru</h3><div class="table-scroll">'
+                   '<table class="tabel kelola"><thead><tr><th class="no">No</th>'
+                   '<th class="nama">Nama</th><th>Mapel</th><th>Username</th>'
+                   '<th>Kode QR</th><th>Aksi</th>'
+                   f'</tr></thead><tbody>{items}</tbody></table></div></div>')
     if not bagian:
         bagian = (f'<div class="card"><p class="muted">Tidak ada hasil untuk '
                   f'"{esc(q)}". Coba kata kunci lain.</p></div>')
@@ -1904,6 +1913,99 @@ def _cari(self, user, qs, flash):
     {ringkasan}
     {bagian}"""
     return self.send_html(layout(user, "Pencarian", body, flash))
+
+
+def _siswa_detail(self, user, sid, flash):
+    """Detail satu siswa: identitas + Rekap Absensi 6 Bulan Terakhir
+    (bulan berjalan dan 5 bulan kalender sebelumnya, Asia/Jakarta),
+    dihitung dari tabel kehadiran. Boleh dibuka admin & guru."""
+    conn = db()
+    st = conn.execute(
+        """SELECT s.*, c.nama AS kelas FROM students s
+           JOIN classes c ON c.id = s.class_id WHERE s.id=?""",
+        (sid,)).fetchone()
+    if not st:
+        conn.close()
+        return self.redirect("/cari", "Data tidak ditemukan.")
+    hari_ini = waktu_sekarang().date()
+    # Enam bulan kalender berurutan: 5 bulan lalu .. bulan berjalan.
+    bulan_list = []
+    y, m = hari_ini.year, hari_ini.month
+    for _ in range(6):
+        bulan_list.append((y, m))
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    bulan_list.reverse()
+    status_list = ("Hadir", "Terlambat", "Sakit", "Izin", "Alpa")
+    total = {s: 0 for s in status_list}
+    baris = ""
+    for (y, m) in bulan_list:
+        awal = f"{y:04d}-{m:02d}-01"
+        y2, m2 = (y + 1, 1) if m == 12 else (y, m + 1)
+        akhir = f"{y2:04d}-{m2:02d}-01"
+        hitung = {r["status"]: r["c"] for r in conn.execute(
+            """SELECT status, COUNT(*) AS c FROM kehadiran
+               WHERE ref_type='siswa' AND ref_id=?
+                 AND tanggal>=? AND tanggal<?
+               GROUP BY status""", (sid, awal, akhir)).fetchall()}
+        sel = ""
+        for s in status_list:
+            n = hitung.get(s, 0)
+            total[s] += n
+            sel += f"<td>{n}</td>"
+        baris += (f'<tr><td class="nama">{NAMA_BULAN[m - 1]} {y}</td>'
+                  f'{sel}</tr>')
+    # Rincian per catatan pada jendela 6 bulan yang sama, terbaru dulu.
+    # Kolom Jam hanya terisi untuk catatan scan (Hadir/Terlambat);
+    # Sakit/Izin/Alpa tampil "—" (keterangannya adalah tanggalnya).
+    awal_window = f"{bulan_list[0][0]:04d}-{bulan_list[0][1]:02d}-01"
+    y_ak, m_ak = bulan_list[-1]
+    y_ak, m_ak = (y_ak + 1, 1) if m_ak == 12 else (y_ak, m_ak + 1)
+    akhir_window = f"{y_ak:04d}-{m_ak:02d}-01"
+    rincian_rows = conn.execute(
+        """SELECT tanggal, status, jam FROM kehadiran
+           WHERE ref_type='siswa' AND ref_id=? AND tanggal>=? AND tanggal<?
+           ORDER BY tanggal DESC""",
+        (sid, awal_window, akhir_window)).fetchall()
+    conn.close()
+    rincian = ""
+    for rr in rincian_rows:
+        d = datetime.strptime(rr["tanggal"], "%Y-%m-%d").date()
+        tgl_fmt = f"{NAMA_HARI[d.weekday()]}, {fmt_tanggal(d)}"
+        jam_fmt = (esc(rr["jam"]) if rr["status"] in ("Hadir", "Terlambat")
+                   and rr["jam"] else "&mdash;")
+        rincian += (f'<tr><td class="nama">{tgl_fmt}</td>'
+                    f'<td><span class="pill p-{rr["status"].lower()}">'
+                    f'{esc(rr["status"])}</span></td>'
+                    f'<td>{jam_fmt}</td></tr>')
+    if rincian:
+        rincian_html = ('<div class="card table-card"><h3>Rincian Kehadiran</h3>'
+                        '<div class="table-scroll">'
+                        '<table class="tabel"><thead><tr><th class="nama">Tanggal</th>'
+                        '<th>Status</th><th>Jam</th></tr></thead>'
+                        f'<tbody>{rincian}</tbody></table></div></div>')
+    else:
+        rincian_html = ('<div class="card"><h3>Rincian Kehadiran</h3>'
+                        '<p class="muted">Belum ada catatan kehadiran pada '
+                        '6 bulan terakhir.</p></div>')
+    total_sel = "".join(f"<td>{total[s]}</td>" for s in status_list)
+    edit = (f' &mdash; <a href="/admin/siswa/{st["id"]}/edit">Edit</a>'
+            if user["role"] == "admin" else "")
+    body = f"""<h2>Detail Siswa</h2>
+    <div class="card">
+      <p><b>{esc(st["nama"])}</b></p>
+      <p class="muted">NIS: <code>{esc(st["kode"])}</code> &mdash; Kelas: {esc(st["kelas"])}{edit}</p>
+    </div>
+    <div class="card table-card"><h3>Rekap Absensi 6 Bulan Terakhir</h3>
+    <div class="table-scroll">
+    <table class="tabel"><thead><tr><th class="nama">Bulan</th>
+    <th>Hadir</th><th>Terlambat</th><th>Sakit</th><th>Izin</th><th>Alpa</th></tr></thead>
+    <tbody>{baris}<tr class="total-row"><td class="nama">Total</td>{total_sel}</tr></tbody></table>
+    </div></div>
+    {rincian_html}
+    <p><a href="/cari">Kembali ke pencarian</a></p>"""
+    return self.send_html(layout(user, "Detail Siswa", body, flash))
 
 
 def _admin_guru(self, user, flash):
@@ -1917,15 +2019,16 @@ def _admin_guru(self, user, flash):
     items = ""
     for i, r in enumerate(rows):
         nama_js = js_str(r["nama"])
-        dasar = (f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
-                 f'&mdash; {esc(r["mapel"] or "-")} '
-                 f'&mdash; username: <code>{esc(r["username"])}</code> '
-                 f'&mdash; kode QR: <code>{esc(r["kode_qr"] or "-")}</code> '
-                 f'&mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
+        dasar = (f'<tr><td class="no">{i + 1}</td>'
+                 f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
+                 f'<td>{esc(r["mapel"] or "-")}</td>'
+                 f'<td><code>{esc(r["username"])}</code></td>'
+                 f'<td><code>{esc(r["kode_qr"] or "-")}</code></td>'
+                 f'<td class="aksi"><a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
         if not r["aktif"]:
             items += (dasar + '(nonaktif) '
                       f'<form method="post" action="/admin/guru/{r["id"]}/aktifkan" class="inline">'
-                      f'<button type="submit" class="btn btn-ghost btn-sm">Aktifkan</button></form></li>')
+                      f'<button type="submit" class="btn btn-ghost btn-sm">Aktifkan</button></form></td></tr>')
         elif r["jml_riwayat"]:
             confirm_msg = (f"Nonaktifkan guru {nama_js}? Guru ini sudah punya riwayat kehadiran, "
                            f"jadi akunnya akan dinonaktifkan (bukan dihapus) dan riwayat "
@@ -1933,16 +2036,19 @@ def _admin_guru(self, user, flash):
             items += (dasar +
                       f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
                       f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
         else:
             confirm_msg = f"Hapus guru {nama_js}? Akun guru ini akan dihapus permanen."
             items += (dasar +
                       f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
                       f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
-    items = items or '<li class="muted">Belum ada guru.</li>'
+                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+    items = items or '<tr><td colspan="6" class="muted">Belum ada guru.</td></tr>'
     body = f"""<h2>Kelola Guru</h2>
-    <div class="card"><ul class="plain-list">{items}</ul></div>
+    <div class="card table-card"><div class="table-scroll">
+    <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
+    <th>Mapel</th><th>Username</th><th>Kode QR</th><th>Aksi</th></tr></thead>
+    <tbody>{items}</tbody></table></div></div>
     <div class="card form-card"><h3>Tambah Guru</h3>
     <form method="post" action="/admin/guru">
       <label>Nama <input name="nama" required></label>
@@ -2080,18 +2186,22 @@ def _admin_kelas(self, user, flash):
            FROM classes c ORDER BY c.nama""").fetchall()
     conn.close()
     items = ""
-    for r in rows:
+    for i, r in enumerate(rows):
         confirm_msg = f"Hapus kelas {js_str(r['nama'])}?"
         items += (
-            f'<li><b><a href="/admin/kelas/{r["id"]}">{esc(r["nama"])}</a></b> '
-            f'&mdash; {r["jml"]} siswa '
-            f'&mdash; <a href="/admin/kelas/{r["id"]}/edit">Edit</a> '
+            f'<tr><td class="no">{i + 1}</td>'
+            f'<td class="nama"><b><a href="/admin/kelas/{r["id"]}">{esc(r["nama"])}</a></b></td>'
+            f'<td class="jml">{r["jml"]}</td>'
+            f'<td class="aksi"><a href="/admin/kelas/{r["id"]}/edit">Edit</a> '
             f'<form method="post" action="/admin/kelas/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
-    items = items or '<li class="muted">Belum ada data.</li>'
+            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+    items = items or '<tr><td colspan="4" class="muted">Belum ada data.</td></tr>'
     body = f"""<h2>Kelola Kelas</h2>
-    <div class="card"><ul class="plain-list">{items}</ul></div>
+    <div class="card table-card"><div class="table-scroll">
+    <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama Kelas</th>
+    <th>Jumlah Siswa</th><th>Aksi</th></tr></thead>
+    <tbody>{items}</tbody></table></div></div>
     <div class="card form-card"><h3>Tambah Kelas</h3>
     <form method="post" action="/admin/kelas">
       <label>Nama baru <input name="nama" required></label>
@@ -2190,17 +2300,22 @@ def _admin_kelas_detail(self, user, kid, flash):
         "SELECT * FROM students WHERE class_id=? ORDER BY nama", (kid,)).fetchall()
     conn.close()
     items = ""
-    for r in rows:
+    for i, r in enumerate(rows):
         confirm_msg = (f"Hapus siswa {js_str(r['nama'])}? "
                        "Catatan kehadirannya juga akan terhapus.")
         items += (
-            f'<li><b>{esc(r["nama"])}</b> &mdash; NIS: <code>{esc(r["kode"])}</code> '
-            f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
+            f'<tr><td class="no">{i + 1}</td>'
+            f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
+            f'<td><code>{esc(r["kode"])}</code></td>'
+            f'<td class="aksi"><a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
             f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
     if items:
-        daftar = f'<div class="card"><ol class="plain-list">{items}</ol></div>'
+        daftar = ('<div class="card table-card"><div class="table-scroll">'
+                  '<table class="tabel kelola"><thead><tr><th class="no">No</th>'
+                  '<th class="nama">Nama</th><th>NIS</th><th>Aksi</th></tr></thead>'
+                  f'<tbody>{items}</tbody></table></div></div>')
     else:
         daftar = ('<div class="card"><div class="empty-state">'
                   + ikon_tema("tas")
@@ -2233,16 +2348,21 @@ def _admin_siswa(self, user, qs, flash):
     for i, r in enumerate(rows):
         confirm_msg = f"Hapus siswa {js_str(r['nama'])}? Catatan kehadirannya juga akan terhapus."
         items += (
-            f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
-            f'&mdash; NIS: <code>{esc(r["kode"])}</code> '
-            f'&mdash; {esc(r["kelas"])} '
+            f'<tr><td class="no">{i + 1}</td>'
+            f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
+            f'<td><code>{esc(r["kode"])}</code></td>'
+            f'<td>{esc(r["kelas"])}</td>'
+            f'<td class="aksi"><a href="/siswa/{r["id"]}">Detail</a> '
             f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
             f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
-    items = items or '<li class="muted">Belum ada siswa.</li>'
+            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+    items = items or '<tr><td colspan="5" class="muted">Belum ada siswa.</td></tr>'
     body = f"""<h2>Kelola Siswa</h2>
-    <div class="card"><ul class="plain-list">{items}</ul></div>
+    <div class="card table-card"><div class="table-scroll">
+    <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
+    <th>NIS</th><th>Kelas</th><th>Aksi</th></tr></thead>
+    <tbody>{items}</tbody></table></div></div>
     <div class="card form-card"><h3>Tambah Siswa</h3>
     <form method="post" action="/admin/siswa">
       <label>Nama <input name="nama" required></label>
@@ -2766,6 +2886,7 @@ def _post_admin_backup_pulihkan(self):
 
 # Tempelkan handler-handler di atas sebagai method Handler.
 Handler.cari = _cari
+Handler.siswa_detail = _siswa_detail
 Handler.admin_guru = _admin_guru
 Handler.post_admin_guru = _post_admin_guru
 Handler._get_guru = _get_guru

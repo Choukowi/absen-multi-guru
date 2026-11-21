@@ -112,7 +112,7 @@ def dbqf(dbfile, sql, args=()):
 
 
 def id_dari_daftar(htmltxt, base, penanda):
-    for chunk in htmltxt.split("<li>"):
+    for chunk in htmltxt.split("<tr>"):
         if penanda in chunk:
             m = re.search(base + r"/(\d+)/edit", chunk)
             if m:
@@ -220,12 +220,12 @@ start_server("2026-11-16T06:45:00", dbfile=DBMIG)
 admin_m, url, _ = login("admin", "admin123")
 must("dashboard" in url, "MIGRASI: server baru jalan di DB lama & login admin lama berhasil")
 s, url, daftar_guru_m = req(admin_m, "/admin/guru")
-chunk_mig = next((c for c in daftar_guru_m.split("<li>") if "gurumigrasi" in c), "")
+chunk_mig = next((c for c in daftar_guru_m.split("<tr>") if "gurumigrasi" in c), "")
 must("Guru Migrasi" in daftar_guru_m, "MIGRASI: guru lama tetap terdaftar")
-must(re.search(r"kode QR: <code>G\d+</code>", chunk_mig) is not None,
+must(re.search(r"<code>G\d+</code>", chunk_mig) is not None,
      "MIGRASI: guru lama mendapat kode_qr backfill otomatis")
-must("&mdash; - &mdash;" in chunk_mig,
-     "MIGRASI: mapel guru lama kosong (default '') tanpa error")
+must("<td>-</td>" in chunk_mig,
+     "MIGRASI: mapel guru lama kosong (default '') tampil '-' di kolom Mapel")
 s, url, daftar_siswa_m = req(admin_m, "/admin/siswa")
 must(all(n in daftar_siswa_m for n in
          ["Siswa Migrasi A", "Siswa Migrasi B", "Siswa Migrasi C",
@@ -333,8 +333,8 @@ s, url, daftar_guru = req(admin, "/admin/guru")
 must("UJI-Matematika" in daftar_guru, "daftar guru menampilkan mata pelajaran")
 g1_id = id_dari_daftar(daftar_guru, "/admin/guru", "guruuji")
 g2_id = id_dari_daftar(daftar_guru, "/admin/guru", "guruujidua")
-chunk_g1 = next((c for c in daftar_guru.split("<li>") if "guruuji" in c), "")
-m_qr = re.search(r"kode QR: <code>(G\d+)</code>", chunk_g1)
+chunk_g1 = next((c for c in daftar_guru.split("<tr>") if "guruuji" in c), "")
+m_qr = re.search(r"<code>(G\d+)</code>", chunk_g1)
 must(m_qr is not None, "kode QR guru dibuat otomatis (format G + 3 digit)")
 g1_qr = m_qr.group(1)
 must(g1_id and g2_id, f"id guru terbaca: {g1_id}, {g2_id}")
@@ -781,12 +781,12 @@ req(admin, "/admin/siswa", {"nama": "Siswa Detail Dua", "kode": "UJI-D02", "clas
 req(admin, "/admin/siswa", {"nama": "Siswa Lain Kelas", "kode": "UJI-L01", "class_id": kl})
 # daftar kelas: jumlah siswa + tautan detail pada baris kelas yang benar
 s, url, daftar_kelas = req(admin, "/admin/kelas")
-chunk_d = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Detail" in c), "")
-chunk_l = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Lain" in c), "")
-must("2 siswa" in chunk_d and f'href="/admin/kelas/{kd}"' in chunk_d,
-     "daftar kelas: UJI-Kelas-Detail tampil '2 siswa' + tautan ke detailnya")
-must("1 siswa" in chunk_l and f'href="/admin/kelas/{kl}"' in chunk_l,
-     "daftar kelas: UJI-Kelas-Lain tampil '1 siswa' + tautan ke detailnya")
+chunk_d = next((c for c in daftar_kelas.split("<tr>") if "UJI-Kelas-Detail" in c), "")
+chunk_l = next((c for c in daftar_kelas.split("<tr>") if "UJI-Kelas-Lain" in c), "")
+must('<td class="jml">2</td>' in chunk_d and f'href="/admin/kelas/{kd}"' in chunk_d,
+     "daftar kelas: kolom Jumlah Siswa UJI-Kelas-Detail = 2 + tautan ke detailnya")
+must('<td class="jml">1</td>' in chunk_l and f'href="/admin/kelas/{kl}"' in chunk_l,
+     "daftar kelas: kolom Jumlah Siswa UJI-Kelas-Lain = 1 + tautan ke detailnya")
 # halaman detail: hanya siswa kelas itu sendiri, lengkap nama + NIS
 s, url, detail = req(admin, f"/admin/kelas/{kd}")
 must("Kelas UJI-Kelas-Detail" in detail and "2 siswa" in detail,
@@ -807,8 +807,9 @@ s, url, detail = req(admin, f"/admin/kelas/{kd}")
 must("Siswa Detail Tiga" in detail and "UJI-D03" in detail and "3 siswa" in detail,
      "tambah-cepat: siswa baru tampil di detail, jumlah naik jadi 3 siswa")
 s, url, daftar_kelas = req(admin, "/admin/kelas")
-chunk_d = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Detail" in c), "")
-must("3 siswa" in chunk_d, "daftar kelas: jumlah UJI-Kelas-Detail ikut naik jadi 3 siswa")
+chunk_d = next((c for c in daftar_kelas.split("<tr>") if "UJI-Kelas-Detail" in c), "")
+must('<td class="jml">3</td>' in chunk_d,
+     "daftar kelas: jumlah UJI-Kelas-Detail ikut naik jadi 3 siswa")
 # kelas kosong: pesan keadaan kosong + hitungan 0
 req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Hampa"})
 s, url, form_siswa = req(admin, "/admin/siswa")
@@ -818,8 +819,9 @@ s, url, detail_kosong = req(admin, f"/admin/kelas/{kh}")
 must("Belum ada siswa di kelas ini." in detail_kosong and "0 siswa" in detail_kosong,
      "detail kelas kosong: pesan 'Belum ada siswa di kelas ini.' + judul '0 siswa'")
 s, url, daftar_kelas = req(admin, "/admin/kelas")
-chunk_h = next((c for c in daftar_kelas.split("<li>") if "UJI-Kelas-Hampa" in c), "")
-must("0 siswa" in chunk_h, "daftar kelas: kelas kosong tampil '0 siswa'")
+chunk_h = next((c for c in daftar_kelas.split("<tr>") if "UJI-Kelas-Hampa" in c), "")
+must('<td class="jml">0</td>' in chunk_h,
+     "daftar kelas: kelas kosong tampil jumlah siswa 0")
 # guru tidak boleh membuka detail kelas -> 404
 guru, url, _ = login("guruuji", "guruuji123")
 try:
@@ -947,8 +949,8 @@ s, url, daftar_siswa_n = req(admin, "/admin/siswa")
 d3_id = id_dari_daftar(daftar_siswa_n, "/admin/siswa", "UJI-H03")
 must(d3_id, "id siswa UJI-H03 terbaca untuk input Sakit manual")
 s, url, daftar_guru_n = req(admin, "/admin/guru")
-chunk_gd = next((c for c in daftar_guru_n.split("<li>") if "gurudash1" in c), "")
-m_qr_n = re.search(r"kode QR: <code>(G\d+)</code>", chunk_gd)
+chunk_gd = next((c for c in daftar_guru_n.split("<tr>") if "gurudash1" in c), "")
+m_qr_n = re.search(r"<code>(G\d+)</code>", chunk_gd)
 must(m_qr_n is not None, "kode QR Guru Dash Satu terbaca")
 gd1_qr = m_qr_n.group(1)
 total_siswa_n = dbq("SELECT COUNT(*) FROM students")
@@ -1083,8 +1085,8 @@ s, url, daftar_siswa_p = req(admin, "/admin/siswa")
 b2_id = id_dari_daftar(daftar_siswa_p, "/admin/siswa", "UJI-B02")
 must(b2_id, "id siswa UJI-B02 terbaca untuk input Sakit manual")
 s, url, daftar_guru_p = req(admin, "/admin/guru")
-chunk_gb = next((c for c in daftar_guru_p.split("<li>") if "gurubelum1" in c), "")
-m_qr_p = re.search(r"kode QR: <code>(G\d+)</code>", chunk_gb)
+chunk_gb = next((c for c in daftar_guru_p.split("<tr>") if "gurubelum1" in c), "")
+m_qr_p = re.search(r"<code>(G\d+)</code>", chunk_gb)
 must(m_qr_p is not None, "kode QR Guru Belum Satu terbaca")
 gb1_qr = m_qr_p.group(1)
 total_siswa_p = dbq("SELECT COUNT(*) FROM students")
@@ -1194,9 +1196,10 @@ must(dash_q.count('<div class="stat-card">') == 7,
 
 # ===========================================================================
 # Fase R — Nomor urut (No. 1, 2, 3, ...) di daftar nama siswa & guru:
-# Kelola Siswa, Kelola Guru, hasil /cari (tiap bagian mulai dari 1), dan
-# kolom pertama "No" pada tabel mingguan siswa & guru. Detail kelas sudah
-# memakai <ol> bernomor (marker desimal di CSS) — diverifikasi apa adanya.
+# Kelola Siswa, Kelola Guru, detail kelas, dan hasil /cari berupa TABEL
+# dengan kolom pertama "No" (sel <td class="no">; tiap bagian /cari
+# mulai dari 1); dan kolom pertama "No" pada tabel mingguan siswa &
+# guru.
 # Pemeriksaan bersifat sekuens: nomor yang terambil dari HTML harus
 # membentuk 1..N berurutan, tahan terhadap data uji kumulatif fase lain.
 # ===========================================================================
@@ -1211,42 +1214,46 @@ def sekuens_utuh(angka):
     return angka == list(range(1, len(angka) + 1))
 
 
-# --- Kelola Siswa: setiap baris bernomor urut 1..N sesuai urutan tampil ---
+# --- Kelola Siswa: setiap baris tabel bernomor urut 1..N sesuai tampil ---
 s, url, hal_siswa = req(admin, "/admin/siswa")
-no_siswa = nomor_dari(hal_siswa, r'<span class="no">(\d+)\.</span>')
+no_siswa = nomor_dari(hal_siswa, r'<td class="no">(\d+)</td>')
 must(len(no_siswa) >= 2 and sekuens_utuh(no_siswa),
      "Kelola Siswa: nomor baris membentuk urutan 1..N "
      f"(terambil {len(no_siswa)} baris)")
-must(re.search(r'<span class="no">1\.</span> <b>', hal_siswa) is not None
-     and re.search(r'<span class="no">2\.</span> <b>', hal_siswa) is not None,
-     "Kelola Siswa: baris pertama & kedua berawalan '1.' dan '2.' sebelum nama")
+must(re.search(r'<td class="no">1</td><td class="nama"><b>', hal_siswa) is not None
+     and re.search(r'<td class="no">2</td><td class="nama"><b>', hal_siswa) is not None,
+     "Kelola Siswa: baris pertama & kedua berawalan nomor 1 dan 2 sebelum nama")
 # --- Kelola Guru: pola yang sama ---
 s, url, hal_guru = req(admin, "/admin/guru")
-no_guru = nomor_dari(hal_guru, r'<span class="no">(\d+)\.</span>')
+no_guru = nomor_dari(hal_guru, r'<td class="no">(\d+)</td>')
 must(len(no_guru) >= 2 and sekuens_utuh(no_guru),
      "Kelola Guru: nomor baris membentuk urutan 1..N "
      f"(terambil {len(no_guru)} baris)")
-# --- /cari: bagian Siswa & Guru masing-masing bernomor mulai dari 1 ---
+# --- /cari: bagian Siswa & Guru (tabel) masing-masing bernomor dari 1 ---
 s, url, hasil_cari = req(admin, "/cari?q=Cari")
-m_sis = re.search(r"<h3>Siswa</h3><ul class=\"plain-list\">(.*?)</ul>",
+m_sis = re.search(r"<h3>Siswa</h3><div class=\"table-scroll\">(.*?)</table>",
                   hasil_cari, re.S)
 must(m_sis is not None, "/cari?q=Cari: bagian Siswa tampil")
-no_cari_siswa = nomor_dari(m_sis.group(1), r'<span class="no">(\d+)\.</span>')
+no_cari_siswa = nomor_dari(m_sis.group(1), r'<td class="no">(\d+)</td>')
 must(len(no_cari_siswa) >= 2 and sekuens_utuh(no_cari_siswa),
      "/cari: baris bagian Siswa bernomor 1..N dari awal "
      f"(terambil {len(no_cari_siswa)} baris)")
-m_gur = re.search(r"<h3>Guru</h3><ul class=\"plain-list\">(.*?)</ul>",
+m_gur = re.search(r"<h3>Guru</h3><div class=\"table-scroll\">(.*?)</table>",
                   hasil_cari, re.S)
 must(m_gur is not None, "/cari?q=Cari: bagian Guru tampil")
-no_cari_guru = nomor_dari(m_gur.group(1), r'<span class="no">(\d+)\.</span>')
+no_cari_guru = nomor_dari(m_gur.group(1), r'<td class="no">(\d+)</td>')
 must(len(no_cari_guru) >= 1 and sekuens_utuh(no_cari_guru),
      "/cari: baris bagian Guru bernomor mulai dari 1 lagi "
      f"(terambil {len(no_cari_guru)} baris)")
-# --- detail kelas: <ol class="plain-list"> bernomor via marker desimal CSS ---
+# --- detail kelas: tabel dengan kolom "No" (dulu <ol> bernomor CSS) ---
 kc_r = dbq("SELECT id FROM classes WHERE nama='UJI-Kelas-Cari'")
 s, url, hal_detail = req(admin, f"/admin/kelas/{kc_r}")
-must('<ol class="plain-list">' in hal_detail,
-     "detail kelas: daftar siswa memakai <ol> (nomor urut bawaan)")
+must('<table class="tabel kelola">' in hal_detail,
+     "detail kelas: daftar siswa kini berupa tabel")
+no_detail = nomor_dari(hal_detail, r'<td class="no">(\d+)</td>')
+must(len(no_detail) >= 2 and sekuens_utuh(no_detail),
+     "detail kelas: nomor baris tabel membentuk urutan 1..N "
+     f"(terambil {len(no_detail)} baris)")
 s, headers, css_r_bytes = req_bytes(admin, "/static/style.css")
 css_r = css_r_bytes.decode("utf-8", "replace")
 must(re.search(r"ol\.plain-list\s*\{[^}]*list-style:\s*decimal", css_r) is not None,
@@ -1315,8 +1322,8 @@ s, url, daftar_siswa_s = req(admin, "/admin/siswa")
 c_sakit_id = id_dari_daftar(daftar_siswa_s, "/admin/siswa", "UJI-R03")
 must(c_sakit_id, "id siswa UJI-R03 terbaca untuk input Sakit manual")
 s, url, daftar_guru_s = req(admin, "/admin/guru")
-chunk_gx = next((c for c in daftar_guru_s.split("<li>") if "gurulapor1" in c), "")
-m_qr_s = re.search(r"kode QR: <code>(G\d+)</code>", chunk_gx)
+chunk_gx = next((c for c in daftar_guru_s.split("<tr>") if "gurulapor1" in c), "")
+m_qr_s = re.search(r"<code>(G\d+)</code>", chunk_gx)
 must(m_qr_s is not None, "kode QR Guru Lapor Telat terbaca")
 gx_qr = m_qr_s.group(1)
 must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
@@ -1542,8 +1549,8 @@ s, url, daftar_guru_t = req(admin, "/admin/guru")
 
 
 def qr_guru_t(htmltxt, username):
-    chunk = next((c for c in htmltxt.split("<li>") if username in c), "")
-    m = re.search(r"kode QR: <code>(G\d+)</code>", chunk)
+    chunk = next((c for c in htmltxt.split("<tr>") if username in c), "")
+    m = re.search(r"<code>(G\d+)</code>", chunk)
     return m.group(1) if m else None
 
 
@@ -2125,11 +2132,11 @@ must("--warna-menu:#334155" in dash,
 start_server("2026-11-25T06:45:00")
 admin, url, _ = login("admin", "admin123")
 s, url, dash = req(admin, "/dashboard")
-must("ikon-tema-cluster" in dash,
-     "dashboard memuat klaster ikon sekolah (siswa, pensil, buku, tas, "
-     "penggaris, jam)")
-must("16.7 4.5a2.12" in dash,
-     "SVG ikon pensil dari ikon_tema tampil di dashboard")
+must("ikon-tema-cluster" not in dash,
+     "dashboard TIDAK lagi memuat klaster ikon dekoratif di kepala "
+     "(dihapus per permintaan user)")
+must("20.6c.9-3.9" in dash,
+     "SVG ikon siswa dari ikon_tema tetap tampil di kartu statistik dashboard")
 must("Kehadiran per Kelas Hari Ini" in dash,
      "dashboard memuat kartu Kehadiran per Kelas Hari Ini")
 total_k1 = dbq("SELECT COUNT(*) FROM students s JOIN classes c "
@@ -2216,6 +2223,184 @@ admin, url, _ = login("admin", "admin123")
 s, url, dash = req(admin, "/dashboard")
 must("Dilisensikan untuk" not in dash,
      "LISENSI: tanpa env, footer dashboard tanpa label (perilaku lama)")
+
+# ===========================================================================
+# Fase AB — Pembersihan tampilan per permintaan user: (1) klaster ikon
+# dekoratif di kepala dashboard DIHAPUS (ikon_tema tetap dipakai kartu
+# statistik, kartu per kelas, dan keadaan kosong); (2) Kelola Siswa,
+# Kelola Guru, Kelola Kelas, dan daftar siswa di detail kelas kini
+# berupa TABEL (kelas .tabel.kelola) dengan kepala kolom yang jelas,
+# menggantikan daftar <ul>/<ol> lama.
+# ===========================================================================
+s, url, hal_siswa = req(admin, "/admin/siswa")
+must('<table class="tabel kelola">' in hal_siswa,
+     "Kelola Siswa: daftar kini berupa tabel")
+for kepala in ('<th class="no">No</th>', '<th class="nama">Nama</th>',
+               '<th>NIS</th>', '<th>Kelas</th>', '<th>Aksi</th>'):
+    must(kepala in hal_siswa, f"Kelola Siswa: kepala kolom {kepala} tampil")
+s, url, hal_guru = req(admin, "/admin/guru")
+must('<table class="tabel kelola">' in hal_guru,
+     "Kelola Guru: daftar kini berupa tabel")
+for kepala in ('<th class="no">No</th>', '<th class="nama">Nama</th>',
+               '<th>Mapel</th>', '<th>Username</th>', '<th>Kode QR</th>',
+               '<th>Aksi</th>'):
+    must(kepala in hal_guru, f"Kelola Guru: kepala kolom {kepala} tampil")
+s, url, hal_kelas = req(admin, "/admin/kelas")
+must('<table class="tabel kelola">' in hal_kelas,
+     "Kelola Kelas: daftar kini berupa tabel")
+for kepala in ('<th class="no">No</th>', '<th class="nama">Nama Kelas</th>',
+               '<th>Jumlah Siswa</th>', '<th>Aksi</th>'):
+    must(kepala in hal_kelas, f"Kelola Kelas: kepala kolom {kepala} tampil")
+n_k1 = dbq("SELECT COUNT(*) FROM students s JOIN classes c "
+           "ON c.id=s.class_id WHERE c.nama='UJI-Kelas-1'")
+chunk_k1_ab = next((c for c in hal_kelas.split("<tr>")
+                    if "UJI-Kelas-1" in c), "")
+must(f'<td class="jml">{n_k1}</td>' in chunk_k1_ab,
+     f"Kelola Kelas: kolom Jumlah Siswa UJI-Kelas-1 = {n_k1} (sesuai DB)")
+k1_id = dbq("SELECT id FROM classes WHERE nama='UJI-Kelas-1'")
+s, url, hal_detail1 = req(admin, f"/admin/kelas/{k1_id}")
+must('<table class="tabel kelola">' in hal_detail1,
+     "detail kelas: daftar siswa kini berupa tabel")
+for kepala in ('<th class="no">No</th>', '<th class="nama">Nama</th>',
+               '<th>NIS</th>', '<th>Aksi</th>'):
+    must(kepala in hal_detail1, f"detail kelas: kepala kolom {kepala} tampil")
+s, url, dash = req(admin, "/dashboard")
+must("ikon-tema-cluster" not in dash and 'class="ikon-tema"' not in dash,
+     "dashboard: klaster ikon dekoratif di kepala sudah tidak ada")
+must("20.6c.9-3.9" in dash and "9.8V13l2.4 1.6" in dash,
+     "dashboard: ikon siswa & jam dari ikon_tema tetap tampil "
+     "di kartu statistik")
+
+# ===========================================================================
+# Fase AC — /cari berupa tabel + halaman Detail Siswa (/siswa/<id>):
+# identitas, Rekap Absensi 6 Bulan Terakhir (label bulan Indonesia,
+# hitungan per status dari tabel kehadiran, baris Total), dan tabel
+# Rincian Kehadiran per catatan (tanggal berhari Indonesia, pil status,
+# jam scan untuk Hadir/Terlambat, "—" untuk Sakit/Izin/Alpa, terbaru
+# dulu). Skenario dua bulan simulasi: scan Terlambat September 2026,
+# scan Hadir + Sakit manual November 2026.
+# ===========================================================================
+start_server()  # waktu nyata: siapkan data khas fase ini
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Rekap"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+krek = opt_val(form_siswa, "UJI-Kelas-Rekap")
+must(krek, "kelas UJI-Kelas-Rekap dibuat untuk uji detail siswa")
+req(admin, "/admin/siswa", {"nama": "Siswa Rekap Uji", "kode": "UJI-RKP1",
+                            "class_id": krek})
+rek_id = dbq("SELECT id FROM students WHERE kode='UJI-RKP1'")
+must(rek_id, "id Siswa Rekap Uji terbaca")
+
+# --- /cari: kedua bagian kini tabel dengan kepala kolom lengkap ---
+s, url, hasil_cari = req(admin, "/cari?q=Cari")
+must(hasil_cari.count('<table class="tabel kelola">') == 2,
+     "/cari: bagian Siswa dan Guru sama-sama berupa tabel")
+for kepala in ('<th>NIS</th>', '<th>Kelas</th>', '<th>Mapel</th>',
+               '<th>Username</th>', '<th>Kode QR</th>', '<th>Aksi</th>'):
+    must(kepala in hasil_cari, f"/cari: kepala kolom {kepala} tampil")
+s, url, hasil_rekap = req(admin, "/cari?q=Rekap")
+must(f'href="/siswa/{rek_id}"' in hasil_rekap,
+     "/cari: baris siswa memuat tautan Detail ke /siswa/<id>")
+
+# --- September 2026 (Senin 14 Sep, 07:30): scan Terlambat ---
+start_server("2026-09-14T07:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-RKP1"})
+must("Siswa Rekap Uji" in hasil and "Terlambat" in hasil,
+     "scan Siswa Rekap Uji 14 Sep 07:30 -> Terlambat")
+
+# --- November 2026 (Rabu 25 Nov, 06:45): scan Hadir + Sakit 24 Nov ---
+start_server("2026-11-25T06:45:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-RKP1"})
+must("Siswa Rekap Uji" in hasil and "Hadir" in hasil,
+     "scan Siswa Rekap Uji 25 Nov 06:45 -> Hadir")
+s, url, hasil = req(admin, "/kehadiran/edit",
+                    {"tanggal": "2026-11-24", "tipe": "siswa", "id": rek_id,
+                     "status": "Sakit", "jam": ""})
+must("ditandai Sakit" in hasil, "Siswa Rekap Uji ditandai Sakit 24 Nov")
+
+# --- halaman detail pada simulasi November 2026 ---
+s, url, det = req(admin, f"/siswa/{rek_id}")
+must("Siswa Rekap Uji" in det and "UJI-RKP1" in det
+     and "UJI-Kelas-Rekap" in det,
+     "detail siswa: identitas nama + NIS + kelas tampil")
+must(f'href="/admin/siswa/{rek_id}/edit"' in det,
+     "detail siswa: admin melihat tautan Edit")
+must("Rekap Absensi 6 Bulan Terakhir" in det,
+     "detail siswa: tabel rekap 6 bulan tampil")
+label_bulan = ["Juni 2026", "Juli 2026", "Agustus 2026", "September 2026",
+               "Oktober 2026", "November 2026"]
+posisi = [det.find(f'<td class="nama">{lbl}</td>') for lbl in label_bulan]
+must(all(p >= 0 for p in posisi) and posisi == sorted(posisi),
+     "detail siswa: 6 label bulan tampil berurutan Juni..November 2026")
+
+
+def baris_bulan(htmltxt, label):
+    m = re.search(r'<td class="nama">' + re.escape(label) + r'</td>'
+                  r'<td>(\d+)</td><td>(\d+)</td><td>(\d+)</td>'
+                  r'<td>(\d+)</td><td>(\d+)</td>', htmltxt)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+must(baris_bulan(det, "September 2026") == (0, 1, 0, 0, 0),
+     "rekap September 2026: Terlambat 1, lainnya 0")
+# November berisi Hadir (scan 25 Nov) + Sakit (manual 24 Nov) + 1 Alpa
+# otomatis Senin 23 Nov: redirect sesudah input Sakit membuka tabel
+# mingguan, yang mematerialkan Alpa otomatis hari lampau — perilaku
+# aplikasi yang memang benar untuk siswa yang tidak scan hari itu.
+must(baris_bulan(det, "November 2026") == (1, 0, 1, 0, 1),
+     "rekap November 2026: Hadir 1, Sakit 1, Alpa otomatis 1")
+must(baris_bulan(det, "Oktober 2026") == (0, 0, 0, 0, 0),
+     "rekap Oktober 2026: semua 0 (bulan tanpa catatan)")
+m_tot = re.search(r'<tr class="total-row"><td class="nama">Total</td>'
+                  r'<td>(\d+)</td><td>(\d+)</td><td>(\d+)</td>'
+                  r'<td>(\d+)</td><td>(\d+)</td>', det)
+must(m_tot is not None
+     and tuple(int(x) for x in m_tot.groups()) == (1, 1, 1, 0, 1),
+     "rekap baris Total: Hadir 1, Terlambat 1, Sakit 1, Izin 0, Alpa 1")
+
+# --- rincian kehadiran: terbaru dulu, jam scan tampil, Sakit jam "—" ---
+must("Rincian Kehadiran" in det,
+     "detail siswa: tabel Rincian Kehadiran tampil")
+i_hadir = det.find("Rabu, 25 November 2026")
+i_sakit = det.find("Selasa, 24 November 2026")
+i_alpa = det.find("Senin, 23 November 2026")
+i_telat = det.find("Senin, 14 September 2026")
+must(0 <= i_hadir < i_sakit < i_alpa < i_telat,
+     "rincian terurut terbaru dulu: 25 Nov, 24 Nov, 23 Nov, lalu 14 Sep")
+chunk_telat = next((c for c in det.split("<tr>")
+                    if "14 September 2026" in c), "")
+must("Terlambat" in chunk_telat and "07:30" in chunk_telat,
+     "rincian Terlambat: pil status + jam scan 07:30 tampil persis")
+chunk_sakit = next((c for c in det.split("<tr>")
+                    if "24 November 2026" in c), "")
+must("Sakit" in chunk_sakit and "<td>&mdash;</td>" in chunk_sakit,
+     "rincian Sakit: kolom Jam tampil '—'")
+chunk_alpa = next((c for c in det.split("<tr>")
+                   if "23 November 2026" in c), "")
+must("Alpa" in chunk_alpa and "<td>&mdash;</td>" in chunk_alpa,
+     "rincian Alpa otomatis: kolom Jam tampil '—'")
+chunk_hadir = next((c for c in det.split("<tr>")
+                    if "25 November 2026" in c), "")
+must("Hadir" in chunk_hadir and "06:45" in chunk_hadir,
+     "rincian Hadir: pil status + jam scan 06:45 tampil")
+
+# --- guru boleh membuka detail; anonim diarahkan; id asing ditolak ---
+guru, url, _ = login("guruuji", "guruuji123")
+s, url, det_guru = req(guru, f"/siswa/{rek_id}")
+must("Siswa Rekap Uji" in det_guru
+     and "Rekap Absensi 6 Bulan Terakhir" in det_guru,
+     "guru bisa membuka halaman detail siswa")
+must(f'href="/admin/siswa/{rek_id}/edit"' not in det_guru,
+     "detail siswa untuk guru: tanpa tautan Edit admin")
+anon = client()
+s, url, hal = req(anon, f"/siswa/{rek_id}")
+must(urllib.parse.urlparse(url).path == "/login",
+     "anonim membuka /siswa/<id> -> diarahkan ke /login")
+s, url, hasil = req(admin, "/siswa/99999")
+must("Data tidak ditemukan." in hasil,
+     "detail id tak dikenal -> 'Data tidak ditemukan.'")
 
 stop_server()
 if os.path.exists(DBUJI):
