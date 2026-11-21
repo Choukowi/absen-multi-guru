@@ -302,6 +302,34 @@ def icon(name):
     return ICONS.get(name, "")
 
 
+# Ikon sekolah gambar tangan (gaya gores, mengikuti warna teks lewat
+# currentColor sehingga ikut berubah mengikuti tema): siswa dan alat
+# tulis/perlengkapan sekolah. Dipakai klaster dekoratif dashboard, kartu
+# statistik, kartu per kelas, dan keadaan kosong.
+IKON_TEMA = {
+    "siswa": _svg('<circle cx="12" cy="7.8" r="3.4"/>'
+                  '<path d="M5 20.6c.9-3.9 3.6-5.9 7-5.9s6.1 2 7 5.9"/>'),
+    "pensil": _svg('<path d="M4.8 19.2l1.2-4L16.7 4.5a2.12 2.12 0 0 1 3 3L9 18.2z"/>'
+                   '<path d="M14.8 6.4l3 3"/>'),
+    "buku": _svg('<path d="M5 20V5a2 2 0 0 1 2-2h12v16H7a2 2 0 0 0-2 1z"/>'
+                 '<path d="M5 20a2 2 0 0 0 2 2h12v-3"/><path d="M9 7h6"/>'),
+    "tas": _svg('<path d="M6 21v-11a6 6 0 0 1 12 0v11"/>'
+                '<path d="M4.5 21h15"/>'
+                '<path d="M9.5 21v-4.5a2.5 2.5 0 0 1 5 0V21"/>'
+                '<path d="M10 6.8V5.2a2 2 0 0 1 4 0v1.6"/>'),
+    "penggaris": _svg('<rect x="2.5" y="9" width="19" height="6.5" rx="1"/>'
+                      '<path d="M6.5 9v3M10.5 9v3.8M14.5 9v3M18.5 9v3.8"/>'),
+    "jam": _svg('<circle cx="12" cy="13" r="7.5"/>'
+                '<path d="M12 9.8V13l2.4 1.6"/>'
+                '<path d="M5.2 3.8L3.6 6M18.8 3.8l1.6 2.2"/>'
+                '<path d="M8.5 20.5L7 22M15.5 20.5L17 22"/>'),
+}
+
+
+def ikon_tema(nama):
+    return IKON_TEMA.get(nama, "")
+
+
 # ---------------------------------------------------------------------------
 # HTML layout — shell aplikasi modern (sidebar desktop + bottom-nav mobile)
 # ---------------------------------------------------------------------------
@@ -335,7 +363,16 @@ def layout(user, title, body, flash="", aktif=""):
     flash_html = f'<div class="flash">{esc(flash)}</div>' if flash else ""
     peng = get_pengaturan()
     nama_app = peng["nama_sekolah"] or "Absen Siswa"
+    tema = peng.get("tema") or ""
+    # Tema pastel aktif MENANG atas warna latar & warna menu: latar
+    # halaman memakai --tema-bg dari style.css dan penimpa --warna-menu
+    # tidak dimuat sama sekali. Pengecualian: bila wallpaper terpasang,
+    # perilaku wallpaper (termasuk warna latar di belakang lapisannya)
+    # tidak berubah sama sekali.
     bg_style = f' style="background-color:{peng["bg_color"]}"'
+    if tema and not peng["wallpaper"]:
+        bg_style = ""
+    kelas_tema = f" tema-{tema}" if tema else ""
     wp_layer = ""
     if peng["wallpaper"]:
         # Tingkat kejelasan tersimpan -> variabel --wp-alpha menimpa alpha
@@ -355,14 +392,22 @@ def layout(user, title, body, flash="", aktif=""):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} - {esc(nama_app)}</title>
 <link rel="stylesheet" href="/static/style.css"></head>
-<body class="auth-body"{bg_style}>{wp_layer}<div class="auth-wrap">
+<body class="auth-body{kelas_tema}"{bg_style}>{wp_layer}<div class="auth-wrap">
 <div class="auth-card">
 <div class="auth-brand">{brand_mark(peng)}
 <span class="brand-name">{esc(nama_app)}</span></div>
 {flash_html}{body}</div>
 <p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
 </div><script src="/static/app.js"></script></body></html>"""
-    menu_style, menu_cls = gaya_menu(peng)
+    menu_style, nama_kelas_menu = gaya_menu(peng)
+    if tema:
+        menu_style = ""  # tema menang atas warna menu: penimpa tidak dimuat
+    kelas_body = []
+    if nama_kelas_menu:
+        kelas_body.append(nama_kelas_menu)
+    if tema:
+        kelas_body.append(f"tema-{tema}")
+    menu_cls = f' class="{" ".join(kelas_body)}"' if kelas_body else ""
     items = nav_items(user)
     sidenav = "".join(
         f'<a class="nav-item{" aktif" if k == aktif else ""}" href="{href}">'
@@ -624,6 +669,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.post_admin_tampilan_warna_menu(f)
             if path == "/admin/tampilan/kejelasan-wp":
                 return self.post_admin_tampilan_kejelasan_wp(f)
+            if path == "/admin/tampilan/tema":
+                return self.post_admin_tampilan_tema(f)
             if path == "/admin/tampilan/wallpaper/hapus":
                 return self.post_admin_tampilan_wallpaper_hapus()
             if path == "/admin/tampilan/logo/hapus":
@@ -707,6 +754,18 @@ class Handler(BaseHTTPRequestHandler):
         panel_selesai = now.time() >= JAM_PANEL_SELESAI
         tampil_laporan = sudah_sembilan and not panel_selesai
         panel_laporan = self._panel_laporan(conn, tgl) if tampil_laporan else None
+        # Kehadiran per kelas HARI INI dari catatan ASLI (bukan nilai
+        # reset tampilan pukul 09:00): yang terhitung masuk = Hadir +
+        # Terlambat, sama seperti definisi pada tabel mingguan/laporan.
+        per_kelas = conn.execute(
+            """SELECT c.nama AS nama, COUNT(s.id) AS total,
+                      COALESCE(SUM(CASE WHEN k.status IN ('Hadir','Terlambat')
+                                        THEN 1 ELSE 0 END), 0) AS masuk
+               FROM classes c
+               LEFT JOIN students s ON s.class_id = c.id
+               LEFT JOIN kehadiran k ON k.ref_type='siswa' AND k.ref_id = s.id
+                    AND k.tanggal = ?
+               GROUP BY c.id ORDER BY c.nama""", (tgl,)).fetchall()
         conn.close()
         # Nilai kartu dari catatan hari ini (dipakai sebelum 09:00).
         k_hadir_s = hitung[("siswa", "Hadir")] + hitung[("siswa", "Terlambat")]
@@ -727,18 +786,42 @@ class Handler(BaseHTTPRequestHandler):
             k_belum_s = total_siswa
             k_belum_g = total_guru
 
-        def stat(ic, warna, angka, label):
-            return (f'<div class="stat-card"><span class="stat-ic {warna}">{icon(ic)}</span>'
+        def stat(ic_html, warna, angka, label):
+            return (f'<div class="stat-card"><span class="stat-ic {warna}">{ic_html}</span>'
                     f'<span class="stat-txt"><b>{angka}</b><small>{esc(label)}</small></span></div>')
         cards = "".join([
-            stat("check", "hijau", k_hadir_s, "Siswa Hadir"),
-            stat("clock", "kuning", k_telat_s, "Siswa Terlambat"),
-            stat("users", "biru", k_sakit_s, "Siswa Sakit/Izin"),
-            stat("x", "merah", k_alpa_s, "Siswa Alpa"),
-            stat("scan", "ungu", k_belum_s, "Siswa Belum Scan"),
-            stat("scan", "indigo", k_belum_g, "Guru Belum Scan"),
-            stat("badge", "indigo", k_hadir_g, "Guru Hadir"),
+            stat(ikon_tema("siswa"), "hijau", k_hadir_s, "Siswa Hadir"),
+            stat(ikon_tema("jam"), "kuning", k_telat_s, "Siswa Terlambat"),
+            stat(icon("users"), "biru", k_sakit_s, "Siswa Sakit/Izin"),
+            stat(icon("x"), "merah", k_alpa_s, "Siswa Alpa"),
+            stat(icon("scan"), "ungu", k_belum_s, "Siswa Belum Scan"),
+            stat(icon("scan"), "indigo", k_belum_g, "Guru Belum Scan"),
+            stat(icon("badge"), "indigo", k_hadir_g, "Guru Hadir"),
         ])
+        # Kartu Kehadiran per Kelas Hari Ini: satu baris per kelas dengan
+        # batang kemajuan (masuk / total siswa kelas itu). Kelas tanpa
+        # siswa tampil "—" dengan batang 0%. Tanpa kelas sama sekali,
+        # kartunya tidak dirender.
+        baris_kelas = ""
+        for r in per_kelas:
+            total_k = r["total"]
+            masuk_k = r["masuk"] or 0
+            persen_k = round(masuk_k * 100 / total_k) if total_k else 0
+            angka_k = f"{masuk_k}/{total_k}" if total_k else "&mdash;"
+            baris_kelas += (
+                f'<div class="kelas-row"><span class="kelas-nama">{esc(r["nama"])}</span>'
+                f'<span class="kelas-bar"><span style="width:{persen_k}%"></span></span>'
+                f'<span class="kelas-angka">{angka_k}</span></div>')
+        kartu_kelas = ""
+        if per_kelas:
+            kartu_kelas = (
+                '<section class="card kelas-card"><h3>' + ikon_tema("buku")
+                + ' Kehadiran per Kelas Hari Ini</h3>' + baris_kelas + "</section>")
+        # Klaster ikon sekolah dekoratif di kepala dashboard (redup pada
+        # tema bawaan, berwarna mengikuti palet pada tema pastel).
+        cluster = "".join(
+            f'<span class="ikon-tema">{ikon_tema(n)}</span>'
+            for n in ("siswa", "pensil", "buku", "tas", "penggaris", "jam"))
         items = "".join(
             f'<li><span class="pill p-{r["status"].lower()}">{esc(r["status"])}</span> '
             f'<b>{esc(r["nama"])}</b> <span class="muted">{esc(r["sub"] or "")}</span> '
@@ -758,6 +841,7 @@ class Handler(BaseHTTPRequestHandler):
         body = f"""<h2>Dashboard</h2>
         <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))} &bull;
         batas Hadir {JAM_BATAS_HADIR.strftime('%H:%M')}, Alpa otomatis {JAM_BATAS_ALPA.strftime('%H:%M')}</p>
+        <div class="ikon-tema-cluster" aria-hidden="true">{cluster}</div>
         {warn}<div class="card search-card">
           <form method="get" action="/cari" class="search-form">
             <label class="search-label">Pencarian
@@ -771,7 +855,8 @@ class Handler(BaseHTTPRequestHandler):
           <a class="quick-card" href="/tabel-siswa">{icon('users')}<span>Tabel Siswa</span></a>
           <a class="quick-card" href="/tabel-guru">{icon('badge')}<span>Tabel Guru</span></a>
         </div>
-        {panel_laporan}"""
+        {panel_laporan}
+        {kartu_kelas}"""
         return self.send_html(layout(user, "Dashboard", body, flash, aktif="dashboard"))
 
     def _data_laporan(self, conn, tgl):
@@ -1130,7 +1215,7 @@ class Handler(BaseHTTPRequestHandler):
                           f'<small class="muted">NIS {esc(s["kode"])}</small></td>'
                           f'{tds}{tot_tds}</tr>')
         rows_html = rows_html or (
-            f'<tr><td colspan="14"><div class="empty-state">{icon("users")}'
+            f'<tr><td colspan="14"><div class="empty-state">{ikon_tema("siswa")}'
             f'<p>Belum ada siswa di kelas ini.</p>'
             f'<small>Siswa yang ditambahkan admin akan muncul di sini.</small></div></td></tr>')
         total_row = (f'<tr class="total-row"><td></td><td class="nama">Total per hari</td>'
@@ -1588,6 +1673,25 @@ TEKS_MENU_GELAP = "#1c2333"  # teks di atas warna menu yang terang (= --teks)
 # nama tingkatnya; kosong/tidak sah = 'samar' (tampilan seperti sekarang).
 KEJELASAN_WP = {"samar": "0.86", "sedang": "0.65", "jelas": "0.45"}
 KEJELASAN_WP_DEFAULT = "samar"
+# Tema pastel (Pengaturan Tampilan -> Tema): kunci settings 'tema'.
+# Kosong = tampilan bawaan profesional seperti sekarang (tidak berubah);
+# slug yang sah mengaktifkan palet pastel di style.css lewat kelas body
+# .tema-<slug>. Palet lengkapnya tinggal di style.css; di sini hanya
+# nama tampilannya + dua warna gradasi untuk chip pratinjau.
+TEMA = {
+    "pastel-pink": "Pastel Pink Oranye",
+    "mint": "Mint Toska",
+    "langit": "Biru Langit Peach",
+    "lilac": "Lilac Pink",
+    "krem": "Krem Coral",
+}
+TEMA_GRAD = {
+    "pastel-pink": ("#f472a0", "#fb923c"),
+    "mint": ("#34d399", "#2dd4bf"),
+    "langit": ("#60a5fa", "#fdba74"),
+    "lilac": ("#a78bfa", "#f472b6"),
+    "krem": ("#fbbf24", "#fb7185"),
+}
 
 
 def kejelasan_wp(peng):
@@ -1620,7 +1724,7 @@ def teks_di_atas(warna):
 
 
 def gaya_menu(peng):
-    """(blok <style> variabel warna menu, kelas body) untuk layout().
+    """(blok <style> variabel warna menu, nama kelas body) untuk layout().
 
     Hanya bila admin sudah memilih warna menu; belum dipilih -> ("", "")
     sehingga tampilan bawaan tidak berubah sama sekali."""
@@ -1633,7 +1737,7 @@ def gaya_menu(peng):
              f"--teks-menu-redup:rgba({r},{g},{b},.72);"
              f"--menu-hover:rgba({r},{g},{b},.12);"
              f"--menu-aktif:rgba({r},{g},{b},.25);}}</style>")
-    return style, ' class="menu-kustom"'
+    return style, "menu-kustom"
 UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
 WALLPAPER_EXT = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                  ".png": "image/png", ".webp": "image/webp"}
@@ -1643,7 +1747,7 @@ WALLPAPER_NAMA_RE = re.compile(r"^[0-9a-f]{24}\.(jpg|jpeg|png|webp)$")
 def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
     peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": "",
-            "warna_menu": "", "kejelasan_wp": ""}
+            "warna_menu": "", "kejelasan_wp": "", "tema": ""}
     try:
         conn = db()
         for r in conn.execute("SELECT key, value FROM settings").fetchall():
@@ -1659,6 +1763,9 @@ def get_pengaturan():
     if peng["kejelasan_wp"] and \
             peng["kejelasan_wp"].strip().lower() not in KEJELASAN_WP:
         peng["kejelasan_wp"] = ""
+    peng["tema"] = (peng["tema"] or "").strip().lower()
+    if peng["tema"] not in TEMA:
+        peng["tema"] = ""
     if peng["wallpaper"] and not WALLPAPER_NAMA_RE.match(peng["wallpaper"]):
         peng["wallpaper"] = ""
     if peng["logo"] and not WALLPAPER_NAMA_RE.match(peng["logo"]):
@@ -2075,8 +2182,11 @@ def _admin_kelas_detail(self, user, kid, flash):
     if items:
         daftar = f'<div class="card"><ol class="plain-list">{items}</ol></div>'
     else:
-        daftar = ('<div class="card"><p class="muted">'
-                  'Belum ada siswa di kelas ini.</p></div>')
+        daftar = ('<div class="card"><div class="empty-state">'
+                  + ikon_tema("tas")
+                  + '<p>Belum ada siswa di kelas ini.</p>'
+                    '<small>Siswa yang ditambahkan akan muncul di sini.</small>'
+                    '</div></div>')
     body = f"""<h2>Kelas {esc(kelas["nama"])} &mdash; {len(rows)} siswa</h2>
     {daftar}
     <div class="card form-card"><h3>Tambah Siswa</h3>
@@ -2214,6 +2324,25 @@ def _admin_tampilan(self, user, flash):
         cek_j = " checked" if jelas_ini == nilai_j else ""
         radio_jelas += (f'<label><input type="radio" name="kejelasan_wp" '
                         f'value="{nilai_j}"{cek_j}> {label_j}</label>')
+    # Tema: enam pilihan (Default + 5 tema pastel), masing-masing dengan
+    # chip pratinjau gradasi warnanya; yang tercentang = tema yang
+    # sedang berlaku ('' = Default).
+    tema_ini = peng["tema"]
+    pilihan_tema = [("", "Default", "Tampilan profesional saat ini",
+                     "#4f46e5", "#2563eb")]
+    for slug_t, nama_t in TEMA.items():
+        g1_t, g2_t = TEMA_GRAD[slug_t]
+        pilihan_tema.append((slug_t, nama_t, "", g1_t, g2_t))
+    radio_tema = ""
+    for slug_t, nama_t, ket_t, g1_t, g2_t in pilihan_tema:
+        cek_t = " checked" if tema_ini == slug_t else ""
+        ket_html = f"<small>{esc(ket_t)}</small>" if ket_t else ""
+        radio_tema += (
+            f'<label class="tema-pilih">'
+            f'<input type="radio" name="tema" value="{slug_t}"{cek_t}>'
+            f'<span class="tema-chip" '
+            f'style="background:linear-gradient(135deg,{g1_t},{g2_t})"></span>'
+            f'<span class="tema-nama">{esc(nama_t)}{ket_html}</span></label>')
     wp_html = ""
     if peng["wallpaper"]:
         wp_html = f"""<div class="wp-preview"><img src="/wallpaper/{esc(peng['wallpaper'])}"
@@ -2229,6 +2358,15 @@ def _admin_tampilan(self, user, flash):
           onsubmit="return confirm('Hapus logo sekolah? Brand kembali ke ikon bawaan.')">
           <button type="submit" class="btn btn-danger">Hapus Logo</button></form>"""
     body = f"""<h2>Pengaturan Tampilan</h2>
+    <div class="card form-card"><h3>Tema</h3>
+    <p class="muted">Tema pastel membuat tampilan lebih lembut: latar
+    berwarna pastel, sudut kartu lebih bulat, dan aksen gradasi.
+    Selama tema aktif, warna latar dan warna menu mengikuti tema.
+    Wallpaper tetap tampil bila dipasang. Pilih Default untuk kembali
+    ke tampilan profesional seperti sekarang.</p>
+    <form method="post" action="/admin/tampilan/tema">
+      <div class="tema-grid">{radio_tema}</div>
+      <button type="submit" class="btn btn-primary">Simpan Tema</button></form></div>
     <div class="card form-card"><h3>Nama Sekolah &amp; Warna Latar</h3>
     <form method="post" action="/admin/tampilan">
       <label>Nama sekolah (tampil di menu &amp; judul Excel)
@@ -2330,6 +2468,18 @@ def _post_admin_tampilan_kejelasan_wp(self, f):
     set_pengaturan(conn, "kejelasan_wp", nama)
     conn.commit(); conn.close()
     return self.redirect("/admin/tampilan", "Kejelasan wallpaper disimpan.")
+
+
+def _post_admin_tampilan_tema(self, f):
+    slug = (f.get("tema") or "").strip().lower()
+    if slug and slug not in TEMA:
+        # Nilai tidak sah: ditolak, pengaturan lama tidak berubah.
+        return self.redirect("/admin/tampilan",
+                             "Tema tidak valid; pengaturan tidak berubah.")
+    conn = db()
+    set_pengaturan(conn, "tema", slug)
+    conn.commit(); conn.close()
+    return self.redirect("/admin/tampilan", "Tema disimpan.")
 
 
 def _post_admin_tampilan_wallpaper(self):
@@ -2622,6 +2772,7 @@ Handler.admin_tampilan = _admin_tampilan
 Handler.post_admin_tampilan = _post_admin_tampilan
 Handler.post_admin_tampilan_warna_menu = _post_admin_tampilan_warna_menu
 Handler.post_admin_tampilan_kejelasan_wp = _post_admin_tampilan_kejelasan_wp
+Handler.post_admin_tampilan_tema = _post_admin_tampilan_tema
 Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
 Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
 Handler.wallpaper_file = _wallpaper_file

@@ -2019,6 +2019,151 @@ must(f"/wallpaper/{nama_wp_y}" in login_page
 s, url, hasil = req(admin, "/admin/tampilan/wallpaper/hapus", {})
 must("Wallpaper dihapus." in hasil, "wallpaper Fase Y dibersihkan lagi")
 
+# ===========================================================================
+# Fase Z — Tema pastel (Pengaturan Tampilan -> Tema; kunci settings
+# 'tema'): kosong = tampilan bawaan profesional (tidak berubah); 5 slug
+# sah: pastel-pink, mint, langit, lilac, krem. Tema aktif memberi kelas
+# body .tema-<slug> dan MENANG atas warna menu (penimpa --warna-menu
+# tidak dimuat) & warna latar; wallpaper tetap tampil bila dipasang.
+# Nilai tidak sah ditolak tanpa mengubah pengaturan; guru tidak boleh
+# mengubah. Ikon sekolah (ikon_tema) tampil di dashboard, dan kartu
+# "Kehadiran per Kelas Hari Ini" menghitung Hadir+Terlambat ASLI per
+# kelas dari catatan hari itu. Tema ikut tersimpan di backup (tabel
+# settings tercakup salinan DB utuh — dibuktikan dari isi ZIP).
+# ===========================================================================
+def setting_z(key):
+    conn = sqlite3.connect(DBUJI)
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key=?",
+                           (key,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+must(setting_z("tema") is None,
+     "tema belum pernah diatur: kunci tema belum ada di settings")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+must('action="/admin/tampilan/tema"' in hal_tampilan,
+     "Pengaturan Tampilan memuat kartu Tema dengan form-nya sendiri")
+for nama_tema in ("Pastel Pink Oranye", "Mint Toska", "Biru Langit Peach",
+                  "Lilac Pink", "Krem Coral"):
+    must(nama_tema in hal_tampilan, f"pilihan tema tampil: {nama_tema}")
+must("Selama tema aktif, warna latar dan warna menu mengikuti tema."
+     in hal_tampilan,
+     "petunjuk tema tampil: selama tema aktif latar & menu mengikuti tema")
+must("Wallpaper tetap tampil bila dipasang." in hal_tampilan,
+     "petunjuk tema tampil: wallpaper tetap tampil bila dipasang")
+must('name="tema" value="" checked' in hal_tampilan,
+     "keadaan awal: pilihan Default tema yang tercentang")
+
+# Tanpa tema: penimpa warna menu tetap dimuat seperti biasa (Fase W/X).
+s, url, hasil = req(admin, "/admin/tampilan/warna-menu",
+                    {"warna_menu": "#334155"})
+must("Warna menu disimpan." in hasil, "warna menu dipasang untuk uji tema")
+s, url, dash = req(admin, "/dashboard")
+must("--warna-menu:#334155" in dash,
+     "tanpa tema: penimpa --warna-menu dimuat (perilaku lama utuh)")
+
+# Simpan tiap tema -> tersimpan + kelas body berubah + penimpa menu hilang.
+for slug in ("pastel-pink", "mint", "langit", "lilac", "krem"):
+    s, url, hasil = req(admin, "/admin/tampilan/tema", {"tema": slug})
+    must("Tema disimpan." in hasil, f"simpan tema {slug} berhasil")
+    must(setting_z("tema") == slug, f"tema {slug} tersimpan di settings")
+    s, url, dash = req(admin, "/dashboard")
+    must(f"tema-{slug}" in dash, f"dashboard memakai kelas body tema-{slug}")
+    must("--warna-menu" not in dash,
+         f"tema {slug} aktif: penimpa --warna-menu TIDAK dimuat (tema menang)")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+must('name="tema" value="krem" checked' in hal_tampilan,
+     "halaman tampilan menandai tema krem yang sedang aktif")
+
+# Nilai tidak sah ditolak, tema lama utuh.
+s, url, hasil = req(admin, "/admin/tampilan/tema", {"tema": "acak"})
+must("Tema tidak valid" in hasil, "tema tidak sah ditolak dengan pesan jelas")
+must(setting_z("tema") == "krem",
+     "nilai tidak sah tidak mengubah tema tersimpan")
+
+# Guru tidak boleh mengubah tema.
+try:
+    req(guru, "/admin/tampilan/tema", {"tema": "mint"})
+    must(False, "guru mengubah tema harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "guru POST tema -> 404")
+must(setting_z("tema") == "krem", "percobaan guru tidak mengubah tema")
+
+# Wallpaper tetap tampil walau tema aktif.
+s, url, hasil = req(admin, "/admin/tampilan/tema", {"tema": "pastel-pink"})
+must("Tema disimpan." in hasil, "tema pastel-pink dipasang untuk uji wallpaper")
+s, url, hasil = unggah(admin, "/admin/tampilan/wallpaper", "wallpaper",
+                       "wp-tema.png", PNG_1PX)
+must("Wallpaper dipasang." in hasil, "unggah wallpaper saat tema aktif berhasil")
+s, url, dash = req(admin, "/dashboard")
+must("/wallpaper/" in dash and "tema-pastel-pink" in dash,
+     "tema aktif + wallpaper terpasang: wallpaper tetap tampil di dashboard")
+s, url, hasil = req(admin, "/admin/tampilan/wallpaper/hapus", {})
+must("Wallpaper dihapus." in hasil, "wallpaper uji tema dibersihkan lagi")
+
+# Kembali ke Default: kelas tema hilang, penimpa warna menu tampil lagi.
+s, url, hasil = req(admin, "/admin/tampilan/tema", {"tema": ""})
+must("Tema disimpan." in hasil, "simpan tema Default (kosong) berhasil")
+must(setting_z("tema") in ("", None), "tema Default tersimpan kosong")
+s, url, dash = req(admin, "/dashboard")
+must(all(f"tema-{s2}" not in dash for s2 in
+         ("pastel-pink", "mint", "langit", "lilac", "krem")),
+     "Default: dashboard tanpa kelas tema apa pun")
+must("--warna-menu:#334155" in dash,
+     "Default: penimpa --warna-menu dimuat lagi seperti semula")
+
+# --- Kartu Kehadiran per Kelas + ikon tema: pagi sekolah yang disimulasi ---
+start_server("2026-11-25T06:45:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must("ikon-tema-cluster" in dash,
+     "dashboard memuat klaster ikon sekolah (siswa, pensil, buku, tas, "
+     "penggaris, jam)")
+must("16.7 4.5a2.12" in dash,
+     "SVG ikon pensil dari ikon_tema tampil di dashboard")
+must("Kehadiran per Kelas Hari Ini" in dash,
+     "dashboard memuat kartu Kehadiran per Kelas Hari Ini")
+total_k1 = dbq("SELECT COUNT(*) FROM students s JOIN classes c "
+               "ON c.id=s.class_id WHERE c.nama='UJI-Kelas-1'")
+must(total_k1 == 4, f"kelas UJI-Kelas-1 berisi 4 siswa (terbaca {total_k1})")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-001"})
+must("Siswa Uji A" in hasil and "Hadir" in hasil,
+     "scan UJI-001 pukul 06:45 tercatat Hadir")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-002"})
+must("Siswa Uji B" in hasil and "Hadir" in hasil,
+     "scan UJI-002 pukul 06:45 tercatat Hadir")
+s, url, dash = req(admin, "/dashboard")
+seksi_kelas = dash.split("Kehadiran per Kelas Hari Ini", 1)[1]
+chunk_k1 = next((c for c in seksi_kelas.split("kelas-row")
+                 if "UJI-Kelas-1" in c), "")
+must(f"2/{total_k1}" in chunk_k1,
+     f"kartu per kelas: UJI-Kelas-1 tampil 2/{total_k1} sesudah 2 scan")
+must(f"width:{round(2 * 100 / total_k1)}%" in chunk_k1,
+     "kartu per kelas: batang UJI-Kelas-1 terisi sesuai persentase masuk")
+chunk_hampa = next((c for c in seksi_kelas.split("kelas-row")
+                    if "UJI-Kelas-Hampa" in c), "")
+must("&mdash;" in chunk_hampa and "width:0%" in chunk_hampa,
+     "kartu per kelas: kelas kosong tampil '—' dengan batang 0%")
+
+# --- Tema ikut tersimpan di backup (tabel settings dalam ZIP) ---
+s, url, hasil = req(admin, "/admin/tampilan/tema", {"tema": "pastel-pink"})
+must("Tema disimpan." in hasil and setting_z("tema") == "pastel-pink",
+     "tema pastel-pink dipasang sebelum backup Fase Z")
+st, hdr, zipdata = req_bytes(admin, "/admin/backup/unduh")
+zf_z = zipfile.ZipFile(io.BytesIO(zipdata))
+DBZ = "/tmp/absen-uji-z.db"
+with open(DBZ, "wb") as fh:
+    fh.write(zf_z.read("absen.db"))
+must(dbqf(DBZ, "SELECT value FROM settings WHERE key='tema'") == "pastel-pink",
+     "backup (ZIP) memuat tema di tabel settings")
+os.remove(DBZ)
+s, url, hasil = req(admin, "/admin/tampilan/tema", {"tema": ""})
+must("Tema disimpan." in hasil and setting_z("tema") in ("", None),
+     "tema dikembalikan ke Default di akhir Fase Z")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)
