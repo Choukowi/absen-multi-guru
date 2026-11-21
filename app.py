@@ -419,7 +419,7 @@ def brand_mark(peng, sm=False):
     return f'<span class="{cls}">{icon("logo")}</span>'
 
 
-def layout(user, title, body, flash="", aktif=""):
+def layout(user, title, body, flash="", aktif="", bawah_auth=""):
     flash_html = f'<div class="flash">{esc(flash)}</div>' if flash else ""
     peng = get_pengaturan()
     nama_app = peng["nama_sekolah"] or "Absen Siswa"
@@ -463,7 +463,7 @@ def layout(user, title, body, flash="", aktif=""):
 <div class="auth-brand">{brand_mark(peng)}
 <span class="brand-name">{esc(nama_app)}</span></div>
 {flash_html}{body}</div>
-{lisensi_html}<p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
+{bawah_auth}{lisensi_html}<p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
 </div><script src="/static/app.js"></script></body></html>"""
     menu_style, nama_kelas_menu = gaya_menu(peng)
     if tema:
@@ -637,13 +637,44 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             return self.redirect("/dashboard")
         if path == "/login":
-            body = """<h2>Masuk</h2>
+            body = """<h2>Login Admin</h2>
             <form method="post" action="/login">
               <label>Username <input name="username" required autocomplete="username"></label>
               <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
               <button type="submit" class="btn btn-primary btn-block">Masuk</button></form>
             <p class="muted"><small>Akun uji lokal ada di README proyek. Jangan pakai akun awal di produksi.</small></p>"""
-            return self.send_html(layout(None, "Masuk", body, flash))
+            # Kartu kedua: Login Wali Kelas — wali TIDAK mengetik username;
+            # ia cukup MEMILIH kelasnya (hanya kelas yang sudah punya wali
+            # yang ditawarkan) lalu memasukkan password loginnya.
+            conn = db()
+            kelas_wali = conn.execute(
+                "SELECT id, nama FROM classes WHERE wali_id IS NOT NULL "
+                "ORDER BY nama").fetchall()
+            conn.close()
+            if kelas_wali:
+                opsi = "".join(
+                    f'<option value="{k["id"]}">Wali Kelas {esc(k["nama"])}</option>'
+                    for k in kelas_wali)
+                pilih_kelas = (f'<label>Kelas <select name="kelas_id" required>'
+                               f'{opsi}</select></label>')
+                nonaktif, catatan_wali = "", ""
+            else:
+                pilih_kelas = ('<label>Kelas <select name="kelas_id" disabled>'
+                               '<option>&mdash; Belum ada &mdash;</option>'
+                               '</select></label>')
+                nonaktif = " disabled"
+                catatan_wali = ('<p class="muted"><small>Belum ada wali kelas '
+                                'yang ditunjuk admin.</small></p>')
+            kartu_wali = f"""<div class="auth-card auth-card-wali">
+            <h2>Login Wali Kelas</h2>
+            <form method="post" action="/login-wali">
+              {pilih_kelas}
+              <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+              <button type="submit" class="btn btn-primary btn-block"{nonaktif}>Masuk sebagai Wali Kelas</button></form>
+            {catatan_wali}</div>
+"""
+            return self.send_html(layout(None, "Masuk", body, flash,
+                                         bawah_auth=kartu_wali))
         if path == "/logout":
             cookie = SimpleCookie(self.headers.get("Cookie", ""))
             morsel = cookie.get("absen_session")
@@ -722,6 +753,8 @@ class Handler(BaseHTTPRequestHandler):
     def route_post(self, path):
         if path == "/login":
             return self.post_login()
+        if path == "/login-wali":
+            return self.post_login_wali()
         user = self.current_user()
         if not user:
             return self.redirect("/login", "Silakan masuk dulu.")
@@ -815,12 +848,47 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                     return self.redirect("/login", "Username atau password salah.")
             conn.close()
-            token = secrets.token_urlsafe(32)
-            LOGIN_SESSIONS[token] = row["id"]
-            return self.redirect("/dashboard", f"Selamat datang, {row['nama']}.",
-                                 set_cookie=f"absen_session={token}; HttpOnly; Path=/; SameSite=Lax")
+            return self._sesi_masuk(row)
         conn.close()
         return self.redirect("/login", "Username atau password salah.")
+
+    def _sesi_masuk(self, row):
+        """Buat sesi login server-side untuk user ini dan arahkan ke
+        dashboard dengan sambutan biasa. Dipakai login username maupun
+        login wali kelas (pilih kelas), supaya logika sesinya satu."""
+        token = secrets.token_urlsafe(32)
+        LOGIN_SESSIONS[token] = row["id"]
+        return self.redirect("/dashboard", f"Selamat datang, {row['nama']}.",
+                             set_cookie=f"absen_session={token}; HttpOnly; Path=/; SameSite=Lax")
+
+    def post_login_wali(self):
+        """Login wali kelas TANPA username: wali memilih kelasnya di
+        halaman login, lalu memasukkan password loginnya (password yang
+        sama dengan yang diterbitkan saat penunjukan). Kelas ditelusur ke
+        walinya (classes.wali_id -> users); berhasil hanya bila user itu
+        guru yang aktif dan passwordnya cocok. Semua kegagalan memakai
+        pesan generik yang sama — tidak dibedakan kelas salah vs
+        password salah."""
+        f = self.form()
+        try:
+            kelas_id = int(f.get("kelas_id", ""))
+        except (TypeError, ValueError):
+            kelas_id = None
+        conn = db()
+        row = None
+        if kelas_id is not None:
+            kelas = conn.execute("SELECT wali_id FROM classes WHERE id=?",
+                                 (kelas_id,)).fetchone()
+            if kelas and kelas["wali_id"]:
+                row = conn.execute("SELECT * FROM users WHERE id=?",
+                                   (kelas["wali_id"],)).fetchone()
+        ok = (row is not None and row["role"] == "guru" and bool(row["aktif"])
+              and verify_password(f.get("password", ""),
+                                  row["password_hash"], row["salt"]))
+        conn.close()
+        if ok:
+            return self._sesi_masuk(row)
+        return self.redirect("/login", "Kelas atau password salah.")
 
     # -- dashboard ------------------------------------------------------------
     def dashboard(self, user, flash):

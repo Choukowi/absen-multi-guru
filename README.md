@@ -114,6 +114,14 @@ Hanya **wali kelas** yang bisa login sebagai guru. Modelnya:
   karakter. Username + password itu ditampilkan ke admin **satu kali**
   lewat pesan di layar; sampaikan ke gurunya. Menyimpan edit kelas
   *tanpa* mengganti wali tidak mengubah password yang berlaku.
+- **Cara login wali**: halaman login punya dua kartu — **Login Admin**
+  (username + password) dan **Login Wali Kelas**. Wali *tidak* perlu
+  mengetik username: ia cukup **memilih kelasnya** pada kartu Login
+  Wali Kelas (hanya kelas yang sudah punya wali yang muncul di daftar)
+  lalu memasukkan passwordnya. Bila belum ada wali yang ditunjuk, kartu
+  itu menampilkan catatan "Belum ada wali kelas yang ditunjuk admin."
+  Username `wali<namakelas>` tetap bisa dipakai pada kartu Login Admin
+  sebagai cadangan.
 - **Lupa password**: admin membuka Edit guru yang bersangkutan →
   tombol **Buat Password Baru** menerbitkan password acak baru
   (ditampilkan satu kali; password lama langsung mati).

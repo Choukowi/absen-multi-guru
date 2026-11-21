@@ -2747,6 +2747,120 @@ must("dashboard" in url,
      "AD: sesudah pulih, login wali tetap berlaku dengan kredensial yang sama")
 os.remove(DBPULIH_AD)
 
+# ===========================================================================
+# Fase AE — LOGIN WALI KELAS DENGAN MEMILIH KELAS (permintaan user):
+# halaman login kini jelas punya DUA login — kartu "Login Admin"
+# (username + password, tidak berubah) dan kartu "Login Wali Kelas"
+# (wali MEMILIH kelasnya dari daftar kelas yang sudah punya wali, lalu
+# memasukkan password; TANPA mengetik username). POST /login-wali
+# menelusur kelas -> classes.wali_id -> user guru; berhasil hanya bila
+# user itu aktif & password cocok; semua kegagalan memakai pesan
+# generik "Kelas atau password salah." Kelas tanpa wali tidak
+# ditawarkan & tidak bisa dipakai; sesudah wali dicabut jalurnya mati;
+# tanpa wali sama sekali tampil catatan "Belum ada wali kelas yang
+# ditunjuk admin." dengan pemilih nonaktif.
+# ===========================================================================
+start_server()  # kembali ke DB scratch utama (DBUJI)
+admin, url, _ = login("admin", "admin123")
+must("dashboard" in url,
+     "AE: login admin (username + password) tidak berubah, tetap bisa")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Pilih"})
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Polos"})
+s, url, form_siswa_ae = req(admin, "/admin/siswa")
+kp_id = opt_val(form_siswa_ae, "UJI-Kelas-Pilih")
+kpol_id = opt_val(form_siswa_ae, "UJI-Kelas-Polos")
+must(kp_id and kpol_id, "AE: kelas UJI-Kelas-Pilih & UJI-Kelas-Polos dibuat")
+req(admin, "/admin/guru", {"nama": "Guru Pilih Satu", "mapel": "UJI-PilihMapel"})
+s, url, daftar_guru_ae = req(admin, "/admin/guru")
+gp_id = id_dari_daftar(daftar_guru_ae, "/admin/guru", "<b>Guru Pilih Satu</b>")
+must(gp_id, "AE: id Guru Pilih Satu terbaca")
+s, url, hasil = req(admin, f"/admin/kelas/{kp_id}/edit",
+                    {"nama": "UJI-Kelas-Pilih", "wali_id": str(gp_id)})
+m_ae = re.search(r"password sementara: (\S+)", hasil)
+must(m_ae is not None, "AE: penunjukan wali menerbitkan password sementara")
+pw_ae = m_ae.group(1)
+
+# --- halaman login: dua kartu, pilihan hanya kelas yang sudah bervali ---
+s, url, login_ae = req(client(), "/login")
+must("<h2>Login Admin</h2>" in login_ae
+     and "<h2>Login Wali Kelas</h2>" in login_ae,
+     "AE: halaman login menampilkan DUA login: 'Login Admin' & "
+     "'Login Wali Kelas'")
+must('action="/login-wali"' in login_ae,
+     "AE: kartu wali mengirim ke POST /login-wali")
+must(opt_val(login_ae, "Wali Kelas UJI-Kelas-Pilih") == kp_id,
+     "AE: pilihan wali memuat 'Wali Kelas UJI-Kelas-Pilih' dengan id kelasnya")
+must("Wali Kelas UJI-Kelas-Polos" not in login_ae,
+     "AE: kelas TANPA wali tidak ditawarkan di pilihan wali")
+must(login_ae.count('type="password"') >= 2,
+     "AE: kedua kartu punya kolom password (toggle mata app.js berlaku "
+     "untuk keduanya)")
+
+# --- password salah: gagal generik, tanpa sesi ---
+salah = client()
+s, url, hal = req(salah, "/login-wali",
+                  {"kelas_id": str(kp_id), "password": "salah-total"})
+must(urllib.parse.urlparse(url).path == "/login"
+     and "Kelas atau password salah." in hal,
+     "AE: password salah -> kembali ke /login dengan pesan generik")
+s, url, hal = req(salah, "/dashboard")
+must(urllib.parse.urlparse(url).path == "/login",
+     "AE: login wali yang gagal tidak menyisakan sesi")
+
+# --- kelas tanpa wali dipakai: gagal generik juga ---
+s, url, hal = req(client(), "/login-wali",
+                  {"kelas_id": str(kpol_id), "password": pw_ae})
+must(urllib.parse.urlparse(url).path == "/login"
+     and "Kelas atau password salah." in hal,
+     "AE: kelas tanpa wali -> POST /login-wali gagal generik")
+
+# --- berhasil: masuk sebagai wali dengan akses terbatas yang sama ---
+wali_ae = client()
+s, url, hal = req(wali_ae, "/login-wali",
+                  {"kelas_id": str(kp_id), "password": pw_ae})
+must("dashboard" in url,
+     "AE: wali masuk hanya dengan memilih kelas + password (tanpa username)")
+s, url, dash_ae = req(wali_ae, "/dashboard")
+must("Scan Gerbang" not in dash_ae and "Tabel Guru" not in dash_ae
+     and 'href="/tabel-siswa"' in dash_ae,
+     "AE: sesi dari login pilih-kelas = sesi wali terbatas yang sama")
+s, url, menu_ae = req(wali_ae, "/menu")
+must("Wali Kelas UJI-Kelas-Pilih" in menu_ae,
+     "AE: label sesi terbaca 'Wali Kelas UJI-Kelas-Pilih'")
+
+# --- wali dicabut: pilihan hilang & jalur login mati ---
+s, url, hasil = req(admin, f"/admin/kelas/{kp_id}/edit",
+                    {"nama": "UJI-Kelas-Pilih", "wali_id": "0"})
+must("dicabut" in hasil, "AE: wali UJI-Kelas-Pilih dicabut untuk uji jalur mati")
+s, url, login_ae2 = req(client(), "/login")
+must("Wali Kelas UJI-Kelas-Pilih" not in login_ae2,
+     "AE: sesudah dicabut, kelas tidak lagi ditawarkan di pilihan wali")
+s, url, hal = req(client(), "/login-wali",
+                  {"kelas_id": str(kp_id), "password": pw_ae})
+must(urllib.parse.urlparse(url).path == "/login"
+     and "Kelas atau password salah." in hal,
+     "AE: sesudah dicabut, POST /login-wali kelas itu gagal generik")
+
+# --- tanpa wali sama sekali: catatan + pemilih nonaktif (DB segar) ---
+DBPILIH = "/tmp/absen-pilih.db"
+if os.path.exists(DBPILIH):
+    os.remove(DBPILIH)
+start_server(dbfile=DBPILIH)
+s, url, login_kosong = req(client(), "/login")
+must("Belum ada wali kelas yang ditunjuk admin." in login_kosong,
+     "AE: tanpa wali: catatan 'Belum ada wali kelas yang ditunjuk admin.' tampil")
+must('<select name="kelas_id" disabled>' in login_kosong,
+     "AE: tanpa wali: pemilih kelas nonaktif (disabled)")
+must("<h2>Login Admin</h2>" in login_kosong
+     and "<h2>Login Wali Kelas</h2>" in login_kosong,
+     "AE: tanpa wali pun kedua judul login tetap tampil")
+s, url, hal = req(client(), "/login-wali",
+                  {"kelas_id": "1", "password": "apa-saja"})
+must(urllib.parse.urlparse(url).path == "/login"
+     and "Kelas atau password salah." in hal,
+     "AE: tanpa wali: POST /login-wali selalu gagal generik")
+os.remove(DBPILIH)
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)
