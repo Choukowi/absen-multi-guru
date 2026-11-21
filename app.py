@@ -30,6 +30,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import string
 import tempfile
 import urllib.parse
 import zipfile
@@ -126,7 +127,8 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE TABLE IF NOT EXISTS classes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nama TEXT UNIQUE NOT NULL
+    nama TEXT UNIQUE NOT NULL,
+    wali_id INTEGER REFERENCES users(id)
 );
 CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,6 +188,37 @@ def kode_qr_guru_baru(conn, gid):
     return kode
 
 
+# ---------------------------------------------------------------------------
+# Model "login hanya wali kelas"
+# ---------------------------------------------------------------------------
+def slug_kelas(nama):
+    """Slug nama kelas untuk username wali: huruf kecil, hanya a-z0-9.
+    "1A" -> "1a", "X IPA 1" -> "xipa1", "UJI-Kelas-1" -> "ujikelas1"."""
+    return re.sub(r"[^a-z0-9]", "", (nama or "").lower())
+
+
+def password_acak(n=10):
+    """Password acak huruf+angka (modul secrets) untuk login wali kelas.
+    Ditampilkan ke admin SATU kali lewat pesan flash, lalu hanya hash-nya
+    yang tersimpan."""
+    abjad = string.ascii_letters + string.digits
+    return "".join(secrets.choice(abjad) for _ in range(n))
+
+
+def info_wali(user):
+    """Baris kelas yang diwali user guru ini (dari classes.wali_id), atau
+    None bila user bukan guru / bukan wali kelas mana pun. Dibaca langsung
+    dari DB setiap kali dipanggil, jadi pencabutan penugasan berlaku
+    seketika (sesi wali yang dicabut langsung kehilangan akses)."""
+    if not user or user["role"] != "guru":
+        return None
+    conn = db()
+    row = conn.execute("SELECT * FROM classes WHERE wali_id=?",
+                       (user["id"],)).fetchone()
+    conn.close()
+    return row
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = db()
@@ -196,6 +229,11 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN mapel TEXT DEFAULT ''")
     if "kode_qr" not in kolom_users:
         conn.execute("ALTER TABLE users ADD COLUMN kode_qr TEXT")
+    # Model "login hanya wali kelas": classes.wali_id menunjuk guru (users.id)
+    # yang menjadi wali kelas itu. NULL = belum ada wali (guru belum bisa login).
+    kolom_kelas = {r["name"] for r in conn.execute("PRAGMA table_info(classes)")}
+    if "wali_id" not in kolom_kelas:
+        conn.execute("ALTER TABLE classes ADD COLUMN wali_id INTEGER REFERENCES users(id)")
     conn.commit()
     # backfill kode_qr untuk guru lama yang belum punya
     for r in conn.execute(
@@ -348,6 +386,14 @@ def ikon_tema(nama):
 # HTML layout — shell aplikasi modern (sidebar desktop + bottom-nav mobile)
 # ---------------------------------------------------------------------------
 def nav_items(user):
+    if user["role"] == "guru" and info_wali(user):
+        # Wali kelas: HANYA Dashboard, Tabel Siswa (kelasnya), Cetak Kartu
+        # (kelasnya), dan Ganti Password. (Keluar ada di chip pengguna /
+        # kartu Menu.)
+        return [("dashboard", "/dashboard", "Dashboard", "grid"),
+                ("tabel-siswa", "/tabel-siswa", "Tabel Siswa", "users"),
+                ("cetak", "/cetak", "Cetak Kartu", "printer"),
+                ("ganti-password", "/ganti-password", "Ganti Password", "key")]
     items = [("dashboard", "/dashboard", "Dashboard", "grid"),
              ("scan", "/scan-gerbang", "Scan Gerbang", "scan"),
              ("tabel-siswa", "/tabel-siswa", "Tabel Siswa", "users"),
@@ -432,16 +478,28 @@ def layout(user, title, body, flash="", aktif=""):
     sidenav = "".join(
         f'<a class="nav-item{" aktif" if k == aktif else ""}" href="{href}">'
         f'{icon(ic)}<span>{label}</span></a>' for k, href, label, ic in items)
-    bawah = [("dashboard", "/dashboard", "Dashboard", "grid"),
-             ("scan", "/scan-gerbang", "Scan", "scan"),
-             ("tabel-siswa", "/tabel-siswa", "Siswa", "users"),
-             ("tabel-guru", "/tabel-guru", "Guru", "badge"),
-             ("menu", "/menu", "Menu", "menu")]
+    wali_row = info_wali(user)
+    if wali_row:
+        bawah = [("dashboard", "/dashboard", "Dashboard", "grid"),
+                 ("tabel-siswa", "/tabel-siswa", "Siswa", "users"),
+                 ("cetak", "/cetak", "Kartu", "printer"),
+                 ("menu", "/menu", "Menu", "menu")]
+    else:
+        bawah = [("dashboard", "/dashboard", "Dashboard", "grid"),
+                 ("scan", "/scan-gerbang", "Scan", "scan"),
+                 ("tabel-siswa", "/tabel-siswa", "Siswa", "users"),
+                 ("tabel-guru", "/tabel-guru", "Guru", "badge"),
+                 ("menu", "/menu", "Menu", "menu")]
     bottomnav = "".join(
         f'<a class="bnav-item{" aktif" if k == aktif else ""}" href="{href}">'
         f'{icon(ic)}<span>{label}</span></a>' for k, href, label, ic in bawah)
     initial = esc((user["nama"] or "?").strip()[:1].upper() or "?")
-    role_label = "Admin" if user["role"] == "admin" else "Guru"
+    if user["role"] == "admin":
+        role_label = "Admin"
+    elif wali_row:
+        role_label = f"Wali Kelas {wali_row['nama']}"
+    else:
+        role_label = "Guru"
     return f"""<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -517,6 +575,24 @@ class Handler(BaseHTTPRequestHandler):
         conn.close()
         return row
 
+    def wali_kelas_id(self, user):
+        """id kelas yang diwali user guru ini, atau None (admin / bukan
+        wali). Selalu dibaca segar dari DB per permintaan."""
+        row = info_wali(user)
+        return row["id"] if row else None
+
+    def _keluarkan_sesi(self):
+        cookie = SimpleCookie(self.headers.get("Cookie", ""))
+        morsel = cookie.get("absen_session")
+        if morsel:
+            LOGIN_SESSIONS.pop(morsel.value, None)
+
+    # Rute non-admin yang TIDAK boleh dibuka wali kelas sama sekali.
+    RUTE_TERLARANG_WALI = ("/tabel-guru", "/tabel-guru/excel",
+                           "/laporan/siswa", "/laporan/guru",
+                           "/cari", "/scan-gerbang", "/cetak/guru")
+    PESAN_TERLARANG_WALI = "Halaman itu tidak tersedia untuk wali kelas."
+
     def form(self):
         length = int(self.headers.get("Content-Length", "0") or "0")
         raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -579,6 +655,14 @@ class Handler(BaseHTTPRequestHandler):
         user = self.current_user()
         if not user:
             return self.redirect("/login", "Silakan masuk dulu.")
+        if user["role"] == "guru":
+            # Penjaga model wali kelas, diperiksa SETIAP permintaan:
+            # guru yang bukan wali (lagi) dianggap sudah keluar.
+            if self.wali_kelas_id(user) is None:
+                self._keluarkan_sesi()
+                return self.redirect("/login", "Silakan masuk dulu.")
+            if path in self.RUTE_TERLARANG_WALI:
+                return self.redirect("/dashboard", self.PESAN_TERLARANG_WALI)
         if path == "/dashboard":
             return self.dashboard(user, flash)
         if path == "/cari":
@@ -641,6 +725,13 @@ class Handler(BaseHTTPRequestHandler):
         user = self.current_user()
         if not user:
             return self.redirect("/login", "Silakan masuk dulu.")
+        if user["role"] == "guru":
+            # Penjaga wali kelas yang sama seperti route_get.
+            if self.wali_kelas_id(user) is None:
+                self._keluarkan_sesi()
+                return self.redirect("/login", "Silakan masuk dulu.")
+            if path == "/api/scan":
+                return self.redirect("/dashboard", self.PESAN_TERLARANG_WALI)
         if path == "/admin/tampilan/wallpaper":
             if user["role"] != "admin":
                 return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
@@ -674,6 +765,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.post_admin_guru_edit(int(path.split("/")[3]), f)
             if path.startswith("/admin/guru/") and path.endswith("/hapus"):
                 return self.post_admin_guru_hapus(int(path.split("/")[3]))
+            if path.startswith("/admin/guru/") and path.endswith("/password-baru"):
+                return self.post_admin_guru_password_baru(int(path.split("/")[3]))
             if path.startswith("/admin/guru/") and path.endswith("/aktifkan"):
                 return self.post_admin_guru_aktifkan(int(path.split("/")[3]))
             if path == "/admin/kelas": return self.post_admin_kelas(f)
@@ -706,17 +799,27 @@ class Handler(BaseHTTPRequestHandler):
         conn = db()
         row = conn.execute("SELECT * FROM users WHERE username=?",
                            (f.get("username", "").strip(),)).fetchone()
-        conn.close()
-        if row and not row["aktif"]:
-            # Akun nonaktif tidak bisa masuk; beri pesan jelas bila password-nya benar.
-            if verify_password(f.get("password", ""), row["password_hash"], row["salt"]):
-                return self.redirect("/login", "Akun ini sudah dinonaktifkan.")
-            return self.redirect("/login", "Username atau password salah.")
         if row and verify_password(f.get("password", ""), row["password_hash"], row["salt"]):
+            if not row["aktif"]:
+                # Akun nonaktif tidak bisa masuk; password-nya benar, jadi
+                # beri pesan yang jelas (bukan kegagalan generik).
+                conn.close()
+                return self.redirect("/login", "Akun ini sudah dinonaktifkan.")
+            if row["role"] == "guru":
+                # Model login hanya wali kelas: guru biasa (bukan wali
+                # kelas mana pun saat ini) ditolak dengan pesan generik,
+                # sama seperti kredensial yang salah.
+                wali = conn.execute("SELECT id FROM classes WHERE wali_id=?",
+                                    (row["id"],)).fetchone()
+                if not wali:
+                    conn.close()
+                    return self.redirect("/login", "Username atau password salah.")
+            conn.close()
             token = secrets.token_urlsafe(32)
             LOGIN_SESSIONS[token] = row["id"]
             return self.redirect("/dashboard", f"Selamat datang, {row['nama']}.",
                                  set_cookie=f"absen_session={token}; HttpOnly; Path=/; SameSite=Lax")
+        conn.close()
         return self.redirect("/login", "Username atau password salah.")
 
     # -- dashboard ------------------------------------------------------------
@@ -774,6 +877,11 @@ class Handler(BaseHTTPRequestHandler):
         # TIDAK ikut berubah: tetap nilai reset sesudah 17:00.
         sudah_sembilan = now.time() >= JAM_BATAS_ALPA
         panel_selesai = now.time() >= JAM_PANEL_SELESAI
+        if user["role"] == "guru":
+            # Wali kelas: panel Laporan Hari Ini (kartu yang bisa diklik)
+            # TIDAK tampil untuk wali — halaman laporannya sendiri juga
+            # terlarang. Sesudah 09:00 slot panel bawah dikosongkan.
+            panel_selesai = panel_selesai or sudah_sembilan
         tampil_laporan = sudah_sembilan and not panel_selesai
         panel_laporan = self._panel_laporan(conn, tgl) if tampil_laporan else None
         # Kehadiran per kelas HARI INI dari catatan ASLI (bukan nilai
@@ -855,22 +963,32 @@ class Handler(BaseHTTPRequestHandler):
             warn = ('<div class="flash warn">PERINGATAN: akun admin ini masih memakai '
                     'password awal lokal. Segera ganti lewat menu Ganti Password '
                     'sebelum dipakai beneran.</div>')
-        body = f"""<h2>Dashboard</h2>
-        <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))} &bull;
-        batas Hadir {JAM_BATAS_HADIR.strftime('%H:%M')}, Alpa otomatis {JAM_BATAS_ALPA.strftime('%H:%M')}</p>
-        {warn}<div class="card search-card">
+        if user["role"] == "guru":
+            # Wali kelas: tanpa kartu pencarian (halaman /cari terlarang)
+            # dan kartu cepat hanya menuju Tabel Siswa kelasnya.
+            kartu_cari = ""
+            kartu_cepat = ('<div class="quick-grid">'
+                           f'<a class="quick-card" href="/tabel-siswa">{icon("users")}'
+                           '<span>Tabel Siswa</span></a></div>')
+        else:
+            kartu_cari = """<div class="card search-card">
           <form method="get" action="/cari" class="search-form">
             <label class="search-label">Pencarian
               <input name="q" placeholder="Cari nama siswa, NIS, kelas, nama guru, atau mata pelajaran…"></label>
             <button type="submit" class="btn btn-primary">Cari</button>
           </form>
-        </div>
-        <div class="stat-grid">{cards}</div>
-        <div class="quick-grid">
+        </div>"""
+            kartu_cepat = f"""<div class="quick-grid">
           <a class="quick-card" href="/scan-gerbang">{icon('scan')}<span>Scan Gerbang</span></a>
           <a class="quick-card" href="/tabel-siswa">{icon('users')}<span>Tabel Siswa</span></a>
           <a class="quick-card" href="/tabel-guru">{icon('badge')}<span>Tabel Guru</span></a>
-        </div>
+        </div>"""
+        body = f"""<h2>Dashboard</h2>
+        <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))} &bull;
+        batas Hadir {JAM_BATAS_HADIR.strftime('%H:%M')}, Alpa otomatis {JAM_BATAS_ALPA.strftime('%H:%M')}</p>
+        {warn}{kartu_cari}
+        <div class="stat-grid">{cards}</div>
+        {kartu_cepat}
         {panel_laporan}
         {kartu_kelas}"""
         return self.send_html(layout(user, "Dashboard", body, flash, aktif="dashboard"))
@@ -1190,12 +1308,18 @@ class Handler(BaseHTTPRequestHandler):
                        if user["role"] == "admin" else
                        'Minta admin membuat kelas dulu.') + '</p></div>')
             return self.send_html(layout(user, "Tabel Siswa", body, flash, aktif="tabel-siswa"))
-        kid_raw = (qs.get("kelas") or [""])[0]
-        try:
-            kid = int(kid_raw)
-        except (ValueError, TypeError):
-            kid = classes[0]["id"]
-        kelas = next((c for c in classes if c["id"] == kid), classes[0])
+        wali_row = info_wali(user)
+        if wali_row:
+            # Wali kelas TERKUNCI ke kelasnya sendiri: parameter kelas
+            # lain diabaikan, pemilih kelas tidak dirender sama sekali.
+            kelas = next((c for c in classes if c["id"] == wali_row["id"]), wali_row)
+        else:
+            kid_raw = (qs.get("kelas") or [""])[0]
+            try:
+                kid = int(kid_raw)
+            except (ValueError, TypeError):
+                kid = classes[0]["id"]
+            kelas = next((c for c in classes if c["id"] == kid), classes[0])
         hari_list = self._parse_minggu(qs)
         for d in hari_list:
             pastikan_alpa(conn, d.strftime("%Y-%m-%d"))
@@ -1238,13 +1362,20 @@ class Handler(BaseHTTPRequestHandler):
                      f'{self._total_bawah(per_hari)}'
                      + "".join(f'<td class="tot">{sum(per_hari[j].get(st, 0) for j in range(6)) or ""}</td>'
                                for st in STATUS_LIST) + '</tr>')
-        body = f"""<h2>Tabel Siswa</h2>
-        <div class="card toolbar-card">
-          <form method="get" action="/tabel-siswa" class="toolbar">
+        if wali_row:
+            toolbar_kelas = f"""<div class="toolbar">
+            <span>Kelas Anda: <b>{esc(kelas['nama'])}</b></span>
+            <a class="btn btn-excel" href="/tabel-siswa/excel?kelas={kelas['id']}&minggu={senin.strftime('%Y-%m-%d')}">{icon('download')} Download Excel</a>
+          </div>"""
+        else:
+            toolbar_kelas = f"""<form method="get" action="/tabel-siswa" class="toolbar">
             <label>Kelas <select name="kelas">{opts}</select></label>
             <button type="submit" class="btn btn-primary">Tampilkan</button>
             <a class="btn btn-excel" href="/tabel-siswa/excel?kelas={kelas['id']}&minggu={senin.strftime('%Y-%m-%d')}">{icon('download')} Download Excel</a>
-          </form>
+          </form>"""
+        body = f"""<h2>Tabel Siswa</h2>
+        <div class="card toolbar-card">
+          {toolbar_kelas}
           <div class="week-nav">
             <a class="btn btn-ghost" href="{base}&minggu={prev_m}">&larr; Minggu lalu</a>
             <span class="week-label">{esc(fmt_tanggal(hari_list[0]))} &ndash; {esc(fmt_tanggal(hari_list[-1]))}</span>
@@ -1337,6 +1468,12 @@ class Handler(BaseHTTPRequestHandler):
         if not orang:
             conn.close()
             return self.redirect("/dashboard", "Data tidak ditemukan.")
+        if user["role"] == "guru" and (
+                tipe != "siswa" or orang["class_id"] != self.wali_kelas_id(user)):
+            # Wali kelas: hanya siswa kelasnya sendiri yang boleh diubah;
+            # siswa kelas lain / catatan guru -> seolah tidak ditemukan.
+            conn.close()
+            return self.redirect("/dashboard", "Data tidak ditemukan.")
         if tipe == "siswa":
             sub = orang["sub"]
         rec = conn.execute(
@@ -1384,6 +1521,10 @@ class Handler(BaseHTTPRequestHandler):
             orang = conn.execute("SELECT * FROM users WHERE id=? AND role='guru'",
                                  (ref_id,)).fetchone()
         if not orang:
+            conn.close()
+            return self.redirect("/dashboard", "Data tidak ditemukan.")
+        if user["role"] == "guru" and (
+                tipe != "siswa" or orang["class_id"] != self.wali_kelas_id(user)):
             conn.close()
             return self.redirect("/dashboard", "Data tidak ditemukan.")
         jam = (f.get("jam") or "").strip() or None
@@ -1526,11 +1667,16 @@ class Handler(BaseHTTPRequestHandler):
         if not classes:
             conn.close()
             return self.redirect("/tabel-siswa", "Belum ada kelas.")
-        try:
-            kid = int((qs.get("kelas") or [""])[0])
-        except (ValueError, TypeError):
-            kid = classes[0]["id"]
-        kelas = next((c for c in classes if c["id"] == kid), classes[0])
+        wali_row = info_wali(user)
+        if wali_row:
+            # Wali kelas: Excel selalu untuk kelasnya sendiri.
+            kelas = next((c for c in classes if c["id"] == wali_row["id"]), wali_row)
+        else:
+            try:
+                kid = int((qs.get("kelas") or [""])[0])
+            except (ValueError, TypeError):
+                kid = classes[0]["id"]
+            kelas = next((c for c in classes if c["id"] == kid), classes[0])
         hari_list = self._parse_minggu(qs)
         for d in hari_list:
             pastikan_alpa(conn, d.strftime("%Y-%m-%d"))
@@ -1597,7 +1743,13 @@ class Handler(BaseHTTPRequestHandler):
             for k, href, label, ic in items)
         cards += (f'<a class="menu-card danger" href="/logout">{icon("logout")}'
                   f'<span>Keluar</span></a>')
-        role_label = "Admin" if user["role"] == "admin" else "Guru"
+        wali_row = info_wali(user)
+        if user["role"] == "admin":
+            role_label = "Admin"
+        elif wali_row:
+            role_label = f"Wali Kelas {wali_row['nama']}"
+        else:
+            role_label = "Guru"
         body = f"""<h2>Menu</h2>
         <div class="card user-card"><span class="avatar lg">{esc((user['nama'] or '?')[:1].upper())}</span>
         <span><b>{esc(user['nama'])}</b><br><small class="muted">{role_label} &bull; @{esc(user['username'])}</small></span></div>
@@ -1609,6 +1761,16 @@ class Handler(BaseHTTPRequestHandler):
         conn = db()
         classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
         conn.close()
+        wali_row = info_wali(user)
+        if wali_row:
+            # Wali kelas: hanya kartu siswa kelasnya sendiri — tanpa
+            # pemilih kelas lain dan tanpa kartu guru.
+            body = f"""<h2>Cetak Kartu QR</h2>
+        <div class="menu-grid">
+        <a class="menu-card" href="/cetak/kelas/{wali_row['id']}">{icon("users")}<span>Kartu Siswa &mdash; {esc(wali_row['nama'])}</span></a></div>
+        <p class="muted"><small>Kartu berisi QR Code biasa (bukan QRIS pembayaran),
+        di-scan di gerbang sekolah.</small></p>"""
+            return self.send_html(layout(user, "Cetak Kartu", body, flash, aktif="cetak"))
         links = "".join(
             f'<a class="menu-card" href="/cetak/kelas/{c["id"]}">{icon("users")}'
             f'<span>Kartu Siswa &mdash; {esc(c["nama"])}</span></a>' for c in classes)
@@ -1624,7 +1786,9 @@ class Handler(BaseHTTPRequestHandler):
     def cetak_kelas(self, user, class_id, flash):
         conn = db()
         kelas = conn.execute("SELECT * FROM classes WHERE id=?", (class_id,)).fetchone()
-        if not kelas:
+        if not kelas or (user["role"] == "guru"
+                         and class_id != self.wali_kelas_id(user)):
+            # Untuk wali kelas, kelas lain diperlakukan seperti tidak ada.
             conn.close()
             return self.send_html(layout(user, "404", "<p>Kelas tidak ditemukan.</p>"), status=404)
         students = conn.execute("SELECT * FROM students WHERE class_id=? ORDER BY nama",
@@ -1927,6 +2091,10 @@ def _siswa_detail(self, user, sid, flash):
     if not st:
         conn.close()
         return self.redirect("/cari", "Data tidak ditemukan.")
+    if user["role"] == "guru" and st["class_id"] != self.wali_kelas_id(user):
+        # Wali kelas hanya boleh membuka siswa kelasnya sendiri.
+        conn.close()
+        return self.redirect("/dashboard", "Data tidak ditemukan.")
     hari_ini = waktu_sekarang().date()
     # Enam bulan kalender berurutan: 5 bulan lalu .. bulan berjalan.
     bulan_list = []
@@ -1992,6 +2160,10 @@ def _siswa_detail(self, user, sid, flash):
     total_sel = "".join(f"<td>{total[s]}</td>" for s in status_list)
     edit = (f' &mdash; <a href="/admin/siswa/{st["id"]}/edit">Edit</a>'
             if user["role"] == "admin" else "")
+    if user["role"] == "guru":
+        kembali = '<p><a href="/tabel-siswa">Kembali ke tabel siswa</a></p>'
+    else:
+        kembali = '<p><a href="/cari">Kembali ke pencarian</a></p>'
     body = f"""<h2>Detail Siswa</h2>
     <div class="card">
       <p><b>{esc(st["nama"])}</b></p>
@@ -2004,7 +2176,7 @@ def _siswa_detail(self, user, sid, flash):
     <tbody>{baris}<tr class="total-row"><td class="nama">Total</td>{total_sel}</tr></tbody></table>
     </div></div>
     {rincian_html}
-    <p><a href="/cari">Kembali ke pencarian</a></p>"""
+    {kembali}"""
     return self.send_html(layout(user, "Detail Siswa", body, flash))
 
 
@@ -2013,16 +2185,25 @@ def _admin_guru(self, user, flash):
     rows = conn.execute(
         """SELECT u.*,
                   (SELECT COUNT(*) FROM kehadiran k WHERE k.ref_type='guru' AND k.ref_id=u.id)
-                + (SELECT COUNT(*) FROM kehadiran k WHERE k.dicatat_oleh=u.id) AS jml_riwayat
-           FROM users u WHERE u.role='guru' ORDER BY u.nama""").fetchall()
+                + (SELECT COUNT(*) FROM kehadiran k WHERE k.dicatat_oleh=u.id) AS jml_riwayat,
+                  c.nama AS wali_kelas_nama
+           FROM users u LEFT JOIN classes c ON c.wali_id = u.id
+           WHERE u.role='guru' ORDER BY u.nama""").fetchall()
     conn.close()
     items = ""
     for i, r in enumerate(rows):
         nama_js = js_str(r["nama"])
+        if r["wali_kelas_nama"]:
+            # Guru yang sedang jadi wali: username loginnya + lencana kelas.
+            sel_user = (f'<td><code>{esc(r["username"])}</code> '
+                        f'<span class="wali-badge">Wali {esc(r["wali_kelas_nama"])}</span></td>')
+        else:
+            # Bukan wali: belum punya login (login lahir dari penunjukan wali).
+            sel_user = '<td>&mdash;</td>'
         dasar = (f'<tr><td class="no">{i + 1}</td>'
                  f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
                  f'<td>{esc(r["mapel"] or "-")}</td>'
-                 f'<td><code>{esc(r["username"])}</code></td>'
+                 f'{sel_user}'
                  f'<td><code>{esc(r["kode_qr"] or "-")}</code></td>'
                  f'<td class="aksi"><a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
         if not r["aktif"]:
@@ -2053,27 +2234,29 @@ def _admin_guru(self, user, flash):
     <form method="post" action="/admin/guru">
       <label>Nama <input name="nama" required></label>
       <label>Mata Pelajaran <input name="mapel" required placeholder="mis. Matematika"></label>
-      <label>Username <input name="username" required></label>
-      <label>Password awal <input name="password" type="password" required minlength="8"></label>
+      <p class="muted"><small>Guru di sini adalah data induk (nama + mapel).
+      Login dibuat otomatis hanya saat guru ditunjuk sebagai wali kelas
+      di menu Kelola Kelas.</small></p>
       <button type="submit" class="btn btn-primary">Tambah Guru</button></form></div>"""
     return self.send_html(layout(user, "Guru", body, flash, aktif="guru"))
 
 
 def _post_admin_guru(self, f):
-    try:
-        ph, salt = hash_password(f["password"])
-        conn = db()
-        cur = conn.execute(
-            "INSERT INTO users (username,password_hash,salt,role,nama,mapel) VALUES (?,?,?,'guru',?,?)",
-            (f["username"].strip(), ph, salt, f["nama"].strip(), f.get("mapel", "").strip()))
-        gid = cur.lastrowid
-        conn.execute("UPDATE users SET kode_qr=? WHERE id=?",
-                     (kode_qr_guru_baru(conn, gid), gid))
-        conn.commit(); conn.close()
-        return self.redirect("/admin/guru", "Guru ditambahkan.")
-    except sqlite3.IntegrityError:
-        conn.close()
-        return self.redirect("/admin/guru", "Username sudah dipakai.")
+    # Guru = data induk saja (nama + mapel). Username/password TIDAK dibuat
+    # di sini: kolom username diisi penanda internal unik "guru-<id>" dan
+    # password di-hash dari rahasia acak yang tidak pernah ditampilkan —
+    # kredensial sungguhan lahir hanya lewat penunjukan wali kelas.
+    ph, salt = hash_password(secrets.token_urlsafe(24))
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO users (username,password_hash,salt,role,nama,mapel) VALUES (?,?,?,'guru',?,?)",
+        ("baru-" + secrets.token_hex(8), ph, salt,
+         f["nama"].strip(), f.get("mapel", "").strip()))
+    gid = cur.lastrowid
+    conn.execute("UPDATE users SET username=?, kode_qr=? WHERE id=?",
+                 (f"guru-{gid}", kode_qr_guru_baru(conn, gid), gid))
+    conn.commit(); conn.close()
+    return self.redirect("/admin/guru", "Guru ditambahkan.")
 
 
 def _get_guru(self, conn, gid):
@@ -2083,44 +2266,77 @@ def _get_guru(self, conn, gid):
 def _admin_guru_edit(self, user, gid, flash):
     conn = db()
     g = self._get_guru(conn, gid)
+    wali_row = conn.execute("SELECT * FROM classes WHERE wali_id=?",
+                            (gid,)).fetchone() if g else None
     conn.close()
     if not g:
         return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+    if wali_row:
+        blok_login = f"""
+    <div class="card form-card"><h3>Login Wali Kelas</h3>
+      <label>Username <input value="{esc(g['username'])}" readonly disabled></label>
+      <p class="muted"><small>Guru ini adalah wali kelas
+      <b>{esc(wali_row['nama'])}</b>. Username dibuat otomatis dari nama
+      kelas dan tidak bisa diubah. Bila passwordnya lupa, buat password
+      baru — password acak ditampilkan satu kali.</small></p>
+      <form method="post" action="/admin/guru/{g['id']}/password-baru">
+        <button type="submit" class="btn btn-primary">Buat Password Baru</button></form></div>"""
+    else:
+        blok_login = """
+    <div class="card"><p class="muted">Guru ini belum bisa login. Login
+    dibuat otomatis saat guru ditunjuk sebagai wali kelas di menu
+    Kelola Kelas.</p></div>"""
     body = f"""<h2>Edit Guru</h2>
     <form method="post" action="/admin/guru/{g['id']}/edit" class="card form-card">
       <label>Nama <input name="nama" value="{esc(g['nama'])}" required></label>
       <label>Mata Pelajaran <input name="mapel" value="{esc(g['mapel'] or '')}" required></label>
-      <label>Username <input name="username" value="{esc(g['username'])}" required></label>
       <label>Kode QR guru <input value="{esc(g['kode_qr'] or '')}" readonly disabled></label>
-      <label>Password baru (kosongkan jika tidak diganti)
-        <input name="password" type="password" minlength="8"></label>
       <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
+    {blok_login}
     <p><a href="/admin/guru">Kembali ke daftar guru</a></p>"""
     return self.send_html(layout(user, "Edit Guru", body, flash, aktif="guru"))
 
 
 def _post_admin_guru_edit(self, gid, f):
+    # Hanya data induk yang diubah; username/password login wali TIDAK
+    # disentuh di sini (username lahir dari penunjukan wali, password
+    # diganti lewat tombol "Buat Password Baru" / oleh wali sendiri).
     conn = db()
     g = self._get_guru(conn, gid)
     if not g:
         conn.close()
         return self.redirect("/admin/guru", "Guru tidak ditemukan.")
-    try:
-        pw = f.get("password", "")
-        if pw:
-            ph, salt = hash_password(pw)
-            conn.execute(
-                "UPDATE users SET nama=?, username=?, mapel=?, password_hash=?, salt=? WHERE id=?",
-                (f["nama"].strip(), f["username"].strip(), f.get("mapel", "").strip(), ph, salt, gid))
-        else:
-            conn.execute(
-                "UPDATE users SET nama=?, username=?, mapel=? WHERE id=?",
-                (f["nama"].strip(), f["username"].strip(), f.get("mapel", "").strip(), gid))
-        conn.commit(); conn.close()
-        return self.redirect("/admin/guru", "Guru diperbarui.")
-    except sqlite3.IntegrityError:
+    conn.execute("UPDATE users SET nama=?, mapel=? WHERE id=?",
+                 (f["nama"].strip(), f.get("mapel", "").strip(), gid))
+    conn.commit(); conn.close()
+    return self.redirect("/admin/guru", "Guru diperbarui.")
+
+
+def _post_admin_guru_password_baru(self, gid):
+    """Buat password acak BARU untuk guru yang sedang jadi wali kelas;
+    ditampilkan ke admin satu kali lewat pesan flash. Guru yang bukan
+    wali tidak punya login, jadi ditolak."""
+    conn = db()
+    g = self._get_guru(conn, gid)
+    if not g:
         conn.close()
-        return self.redirect(f"/admin/guru/{gid}/edit", "Username sudah dipakai.")
+        return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+    wali_row = conn.execute("SELECT * FROM classes WHERE wali_id=?",
+                            (gid,)).fetchone()
+    if not wali_row:
+        conn.close()
+        return self.redirect("/admin/guru",
+                             "Guru ini bukan wali kelas; password login "
+                             "hanya untuk wali kelas.")
+    pw = password_acak()
+    ph, salt = hash_password(pw)
+    conn.execute("UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                 (ph, salt, gid))
+    conn.commit(); conn.close()
+    return self.redirect(
+        "/admin/guru",
+        f"Password baru untuk {g['nama']} (wali kelas {wali_row['nama']}): "
+        f"{pw} (sampaikan ke gurunya; password bisa diganti setelah login).")
 
 
 def _post_admin_guru_hapus(self, gid):
@@ -2134,11 +2350,17 @@ def _post_admin_guru_hapus(self, gid):
            WHERE (ref_type='guru' AND ref_id=?) OR dicatat_oleh=?""", (gid, gid)).fetchone()["c"]
     if jml:
         # Sudah punya riwayat kehadiran: jangan hapus, cukup nonaktifkan.
+        # Penugasan walinya TETAP disimpan: begitu diaktifkan lagi, login
+        # walinya berlaku lagi (login tetap tertahan oleh aktif=0 selama
+        # nonaktif).
         conn.execute("UPDATE users SET aktif=0 WHERE id=?", (gid,))
         conn.commit(); conn.close()
         return self.redirect("/admin/guru",
                              "Guru dinonaktifkan karena sudah punya riwayat kehadiran. "
                              "Riwayat kehadirannya tetap tersimpan.")
+    # Hapus permanen: lepaskan dulu penugasan wali (FK classes.wali_id),
+    # kelasnya menjadi tanpa wali.
+    conn.execute("UPDATE classes SET wali_id=NULL WHERE wali_id=?", (gid,))
     conn.execute("DELETE FROM users WHERE id=?", (gid,))
     conn.commit(); conn.close()
     return self.redirect("/admin/guru", "Guru dihapus.")
@@ -2179,32 +2401,153 @@ def _simple_list(self, user, flash, table, title, action, label, aktif_key):
     return self.send_html(layout(user, title, body, flash, aktif=aktif_key))
 
 
+def _opsi_wali(self, conn, kelas_id=None):
+    """HTML <option> untuk pemilih Wali Kelas pada form kelas: pilihan
+    kosong "— Belum ada —" + semua guru AKTIF ("Nama — Mapel"), KECUALI
+    guru yang sudah menjadi wali kelas LAIN (satu guru maksimal satu
+    kelas). Wali kelas ini sendiri tetap tampil dan terpilih — termasuk
+    bila sedang nonaktif, agar penugasannya tidak hilang diam-diam."""
+    rows = conn.execute(
+        "SELECT id, nama, mapel FROM users WHERE role='guru' AND aktif=1 "
+        "ORDER BY nama").fetchall()
+    terpakai = {r["wali_id"]: r["id"] for r in conn.execute(
+        "SELECT id, wali_id FROM classes WHERE wali_id IS NOT NULL").fetchall()}
+    cur = None
+    if kelas_id:
+        r = conn.execute("SELECT wali_id FROM classes WHERE id=?",
+                         (kelas_id,)).fetchone()
+        cur = r["wali_id"] if r else None
+    # Nilai kosong memakai sentinel "0": parse_qs membuang nilai kosong,
+    # jadi value="" tidak akan pernah sampai ke server.
+    opts = '<option value="0">&mdash; Belum ada &mdash;</option>'
+    tampil = set()
+    for g in rows:
+        if terpakai.get(g["id"]) not in (None, kelas_id):
+            continue
+        tampil.add(g["id"])
+        label = (f'{esc(g["nama"])} &mdash; {esc(g["mapel"])}'
+                 if g["mapel"] else esc(g["nama"]))
+        opts += (f'<option value="{g["id"]}"'
+                 f'{" selected" if g["id"] == cur else ""}>{label}</option>')
+    if cur and cur not in tampil:
+        g = conn.execute("SELECT nama, mapel FROM users WHERE id=?",
+                         (cur,)).fetchone()
+        if g:
+            label = (f'{esc(g["nama"])} &mdash; {esc(g["mapel"])}'
+                     if g["mapel"] else esc(g["nama"]))
+            opts += f'<option value="{cur}" selected>{label} (nonaktif)</option>'
+    return opts
+
+
+def _wali_dari_form(self, conn, f, kelas_id):
+    """Baca & validasi pilihan wali dari form kelas.
+    Kembalikan (dikirim, wali_id, pesan_error): dikirim=False bila field
+    wali_id TIDAK ada di form (penugasan tidak diubah sama sekali);
+    wali_id=None berarti "— Belum ada —" (penugasan dicabut)."""
+    if "wali_id" not in f:
+        return False, None, ""
+    mentah = (f.get("wali_id") or "").strip()
+    if not mentah or mentah == "0":
+        # Pilihan "— Belum ada —" (sentinel "0" dari _opsi_wali).
+        return True, None, ""
+    try:
+        gid = int(mentah)
+    except ValueError:
+        return True, None, "Pilihan wali kelas tidak valid."
+    g = conn.execute("SELECT * FROM users WHERE id=? AND role='guru'",
+                     (gid,)).fetchone()
+    if not g:
+        return True, None, "Guru untuk wali kelas tidak ditemukan."
+    cur = None
+    if kelas_id:
+        r = conn.execute("SELECT wali_id FROM classes WHERE id=?",
+                         (kelas_id,)).fetchone()
+        cur = r["wali_id"] if r else None
+    if not g["aktif"] and gid != cur:
+        return True, None, "Guru nonaktif tidak bisa ditunjuk sebagai wali kelas."
+    lain = conn.execute("SELECT nama FROM classes WHERE wali_id=? AND id<>?",
+                        (gid, kelas_id or 0)).fetchone()
+    if lain:
+        return True, None, f"Guru itu sudah menjadi wali kelas {lain['nama']}."
+    return True, gid, ""
+
+
+def _tetapkan_wali(self, conn, kelas, wali_baru):
+    """Terapkan perubahan wali pada baris kelas `kelas` (dict/row dengan
+    id, nama, wali_id LAMA). Bila walinya BERUBAH:
+    - wali lama: username diparkir ke "guru-<id>" (membebaskan nama
+      wali<slug>) — loginnya mati juga oleh penjaga wali di setiap login
+      & permintaan;
+    - wali baru: username := "wali" + slug(nama kelas) (bila bentrok
+      dengan pengguna lain, tambah id kelas), password := acak 10
+      karakter, dan pesan flash kredensial dikembalikan untuk
+      ditampilkan ke admin SATU kali.
+    Wali TIDAK berubah -> tidak menyentuh apa pun, kembalikan None."""
+    lama = kelas["wali_id"]
+    if lama == wali_baru:
+        return None
+    if lama:
+        conn.execute("UPDATE users SET username=? WHERE id=?",
+                     (f"guru-{lama}", lama))
+    if not wali_baru:
+        conn.execute("UPDATE classes SET wali_id=NULL WHERE id=?",
+                     (kelas["id"],))
+        return (f"Wali kelas {kelas['nama']} dicabut; login guru "
+                "sebelumnya sudah tidak berlaku.")
+    g = conn.execute("SELECT * FROM users WHERE id=? AND role='guru'",
+                     (wali_baru,)).fetchone()
+    uname = "wali" + slug_kelas(kelas["nama"])
+    bentrok = conn.execute("SELECT id FROM users WHERE username=? AND id<>?",
+                           (uname, wali_baru)).fetchone()
+    if bentrok:
+        uname = f"{uname}{kelas['id']}"
+    pw = password_acak()
+    ph, salt = hash_password(pw)
+    conn.execute("UPDATE users SET username=?, password_hash=?, salt=? WHERE id=?",
+                 (uname, ph, salt, wali_baru))
+    conn.execute("UPDATE classes SET wali_id=? WHERE id=?",
+                 (wali_baru, kelas["id"]))
+    return (f"Wali kelas {kelas['nama']}: {g['nama']} — username {uname}, "
+            f"password sementara: {pw} (sampaikan ke gurunya; password "
+            "bisa diganti setelah login).")
+
+
 def _admin_kelas(self, user, flash):
     conn = db()
     rows = conn.execute(
-        """SELECT c.*, (SELECT COUNT(*) FROM students s WHERE s.class_id=c.id) AS jml
-           FROM classes c ORDER BY c.nama""").fetchall()
+        """SELECT c.*, (SELECT COUNT(*) FROM students s WHERE s.class_id=c.id) AS jml,
+                  u.nama AS wali_nama
+           FROM classes c LEFT JOIN users u ON u.id = c.wali_id
+           ORDER BY c.nama""").fetchall()
+    opsi_wali = self._opsi_wali(conn, None)
     conn.close()
     items = ""
     for i, r in enumerate(rows):
         confirm_msg = f"Hapus kelas {js_str(r['nama'])}?"
+        sel_wali = (esc(r["wali_nama"]) if r["wali_nama"]
+                    else '<span class="muted">&mdash; Belum ada</span>')
         items += (
             f'<tr><td class="no">{i + 1}</td>'
             f'<td class="nama"><b><a href="/admin/kelas/{r["id"]}">{esc(r["nama"])}</a></b></td>'
             f'<td class="jml">{r["jml"]}</td>'
+            f'<td>{sel_wali}</td>'
             f'<td class="aksi"><a href="/admin/kelas/{r["id"]}/edit">Edit</a> '
             f'<form method="post" action="/admin/kelas/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
             f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
-    items = items or '<tr><td colspan="4" class="muted">Belum ada data.</td></tr>'
+    items = items or '<tr><td colspan="5" class="muted">Belum ada data.</td></tr>'
     body = f"""<h2>Kelola Kelas</h2>
     <div class="card table-card"><div class="table-scroll">
     <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama Kelas</th>
-    <th>Jumlah Siswa</th><th>Aksi</th></tr></thead>
+    <th>Jumlah Siswa</th><th>Wali Kelas</th><th>Aksi</th></tr></thead>
     <tbody>{items}</tbody></table></div></div>
     <div class="card form-card"><h3>Tambah Kelas</h3>
     <form method="post" action="/admin/kelas">
       <label>Nama baru <input name="nama" required></label>
+      <label>Wali Kelas <select name="wali_id">{opsi_wali}</select></label>
+      <p class="muted"><small>Memilih wali kelas langsung membuatkan login
+      untuk guru itu (username &amp; password acak ditampilkan satu kali
+      sesudah disimpan). Wali bisa diganti/dicabut lewat Edit kelas.</small></p>
       <button type="submit" class="btn btn-primary">Tambah</button></form></div>"""
     return self.send_html(layout(user, "Kelola Kelas", body, flash, aktif="kelas"))
 
@@ -2221,7 +2564,25 @@ def _post_simple(self, table, f, back):
 
 
 def _post_admin_kelas(self, f):
-    return self._post_simple("classes", f, "/admin/kelas")
+    conn = db()
+    dikirim, wali_baru, err = self._wali_dari_form(conn, f, None)
+    if err:
+        conn.close()
+        return self.redirect("/admin/kelas", err)
+    try:
+        cur = conn.execute("INSERT INTO classes (nama) VALUES (?)",
+                           (f["nama"].strip(),))
+    except sqlite3.IntegrityError:
+        conn.close()
+        return self.redirect("/admin/kelas", "Nama sudah ada.")
+    kid = cur.lastrowid
+    pesan = None
+    if dikirim and wali_baru:
+        pesan = self._tetapkan_wali(
+            conn, {"id": kid, "nama": f["nama"].strip(), "wali_id": None},
+            wali_baru)
+    conn.commit(); conn.close()
+    return self.redirect("/admin/kelas", pesan or "Data ditambahkan.")
 
 
 def _simple_edit(self, user, table, action, label, item_id, flash, aktif_key):
@@ -2239,7 +2600,24 @@ def _simple_edit(self, user, table, action, label, item_id, flash, aktif_key):
 
 
 def _admin_kelas_edit(self, user, kid, flash):
-    return self._simple_edit(user, "classes", "/admin/kelas", "Kelas", kid, flash, "kelas")
+    conn = db()
+    row = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
+    if not row:
+        conn.close()
+        return self.redirect("/admin/kelas", "Data tidak ditemukan.")
+    opsi_wali = self._opsi_wali(conn, kid)
+    conn.close()
+    body = f"""<h2>Edit Kelas</h2>
+    <form method="post" action="/admin/kelas/{row['id']}/edit" class="card form-card">
+      <label>Nama <input name="nama" value="{esc(row['nama'])}" required></label>
+      <label>Wali Kelas <select name="wali_id">{opsi_wali}</select></label>
+      <p class="muted"><small>Mengganti wali membuatkan login baru untuk
+      wali yang baru (username &amp; password acak ditampilkan satu kali)
+      dan mematikan login wali sebelumnya. Membiarkan wali apa adanya
+      tidak mengubah passwordnya.</small></p>
+      <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
+    <p><a href="/admin/kelas">Kembali ke daftar kelas</a></p>"""
+    return self.send_html(layout(user, "Edit Kelas", body, flash, aktif="kelas"))
 
 
 def _post_simple_edit(self, table, action, label, item_id, f):
@@ -2259,7 +2637,30 @@ def _post_simple_edit(self, table, action, label, item_id, f):
 
 
 def _post_admin_kelas_edit(self, kid, f):
-    return self._post_simple_edit("classes", "/admin/kelas", "Kelas", kid, f)
+    conn = db()
+    row = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
+    if not row:
+        conn.close()
+        return self.redirect("/admin/kelas", "Data tidak ditemukan.")
+    dikirim, wali_baru, err = self._wali_dari_form(conn, f, kid)
+    if err:
+        conn.close()
+        return self.redirect(f"/admin/kelas/{kid}/edit", err)
+    try:
+        conn.execute("UPDATE classes SET nama=? WHERE id=?",
+                     (f["nama"].strip(), kid))
+    except sqlite3.IntegrityError:
+        conn.rollback(); conn.close()
+        return self.redirect(f"/admin/kelas/{kid}/edit", "Nama sudah ada.")
+    pesan = None
+    if dikirim:
+        # Baris kelas dibaca ulang (nama mungkin baru saja diganti) —
+        # slug username wali memakai nama kelas yang berlaku sekarang.
+        kelas_baru = conn.execute("SELECT * FROM classes WHERE id=?",
+                                  (kid,)).fetchone()
+        pesan = self._tetapkan_wali(conn, kelas_baru, wali_baru)
+    conn.commit(); conn.close()
+    return self.redirect("/admin/kelas", pesan or "Kelas diperbarui.")
 
 
 def _post_admin_kelas_hapus(self, kid):
@@ -2893,7 +3294,11 @@ Handler._get_guru = _get_guru
 Handler.admin_guru_edit = _admin_guru_edit
 Handler.post_admin_guru_edit = _post_admin_guru_edit
 Handler.post_admin_guru_hapus = _post_admin_guru_hapus
+Handler.post_admin_guru_password_baru = _post_admin_guru_password_baru
 Handler.post_admin_guru_aktifkan = _post_admin_guru_aktifkan
+Handler._opsi_wali = _opsi_wali
+Handler._wali_dari_form = _wali_dari_form
+Handler._tetapkan_wali = _tetapkan_wali
 Handler._simple_list = _simple_list
 Handler.admin_kelas = _admin_kelas
 Handler._post_simple = _post_simple

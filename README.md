@@ -81,18 +81,57 @@ Saat database masih kosong, aplikasi membuat **satu akun admin awal**:
 > admin juga menampilkan peringatan selama password awal belum diganti.
 
 Akun guru dibuat admin dari menu **Guru → Tambah Guru** (kode QR guru
-dibuat otomatis dan kartunya dicetak dari menu **Cetak Kartu**).
+dibuat otomatis dan kartunya dicetak dari menu **Cetak Kartu**). Guru di
+menu itu adalah **data induk** (nama + mata pelajaran) — guru baru bisa
+login hanya setelah ditunjuk sebagai wali kelas (lihat bagian berikut).
 
 Alur pemakaian singkat:
 
 1. Login admin → buat Kelas, Siswa (isi NIS tiap siswa), Guru (isi mata
    pelajarannya).
-2. Menu **Cetak Kartu** → cetak kartu siswa per kelas + kartu guru,
+2. Menu **Kelola Kelas** → tunjuk wali kelas tiap kelas (login wali
+   langsung terbit; sampaikan username + password sementaranya).
+3. Menu **Cetak Kartu** → cetak kartu siswa per kelas + kartu guru,
    gunting, bagikan.
-3. Di gerbang: login di HP/tablet gerbang → buka **Scan Gerbang** → scan
+4. Di gerbang: login di HP/tablet gerbang → buka **Scan Gerbang** → scan
    kartu yang datang (atau ketik NIS/kode bila kamera bermasalah).
-4. Lihat hasil di **Tabel Siswa** / **Tabel Guru**, unduh Excel mingguan
+5. Lihat hasil di **Tabel Siswa** / **Tabel Guru**, unduh Excel mingguan
    bila perlu. Isi Sakit/Izin dengan mengetuk sel tabel pada tanggalnya.
+
+## Login Wali Kelas
+
+Hanya **wali kelas** yang bisa login sebagai guru. Modelnya:
+
+- **Penunjukan**: admin membuka **Kelola Kelas** → Tambah/Edit kelas →
+  kolom **Wali Kelas** diisi dengan *memilih* guru dari daftar guru yang
+  sudah dimasukkan (tidak perlu mengetik ulang nama). Satu kelas punya
+  paling banyak satu wali, dan satu guru menjadi wali untuk paling
+  banyak satu kelas (guru yang sudah menjadi wali kelas lain tidak
+  muncul lagi di daftar pilihan kelas lain).
+- **Kredensial otomatis**: begitu wali ditunjuk (atau diganti), sistem
+  membuatkan login baru — username `wali<namakelas>` (mis. kelas `1A` →
+  `wali1a`, kelas `X IPA 1` → `walixipa1`) dan **password acak** 10
+  karakter. Username + password itu ditampilkan ke admin **satu kali**
+  lewat pesan di layar; sampaikan ke gurunya. Menyimpan edit kelas
+  *tanpa* mengganti wali tidak mengubah password yang berlaku.
+- **Lupa password**: admin membuka Edit guru yang bersangkutan →
+  tombol **Buat Password Baru** menerbitkan password acak baru
+  (ditampilkan satu kali; password lama langsung mati).
+- **Diganti/dicabut**: wali lama langsung kehilangan login (username-nya
+  diparkir dan penjaga login menolak guru yang bukan wali). Sesi wali
+  yang sedang aktif pun langsung berakhir pada permintaan berikutnya.
+  Guru yang dinonaktifkan tetap tercatat sebagai wali; loginnya tertahan
+  selama nonaktif dan berlaku lagi begitu diaktifkan.
+- **Akses wali** (sengaja dibatasi): **Dashboard** (tanpa kartu
+  pencarian dan tanpa panel Laporan Hari Ini), **Tabel Siswa** untuk
+  kelasnya sendiri saja (tanpa pemilih kelas; koreksi Sakit/Izin hanya
+  untuk siswa kelasnya), **Cetak Kartu** untuk kelasnya sendiri saja,
+  plus **Ganti Password** (untuk mengganti password sementara) dan
+  **Keluar**. Scan Gerbang, Tabel Guru, halaman laporan, pencarian, dan
+  semua menu admin tidak bisa dibuka wali.
+- Guru yang belum ditunjuk sebagai wali **tidak bisa login sama
+  sekali**; pada data lama, semua kelas mulai tanpa wali
+  (`classes.wali_id` kosong) sampai admin menunjuknya.
 
 ## Struktur data (SQLite, `data/absen.db`)
 
