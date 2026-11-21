@@ -126,6 +126,7 @@ input[type="file"] { padding: 9px 12px; }
 .plain-list { list-style: none; padding: 0; margin: 0; }
 .plain-list li { padding: 10px 0; border-bottom: 1px solid #eef1f6; }
 .plain-list li:last-child { border-bottom: 0; }
+.plain-list li .no { color: var(--muted); font-weight: 600; }
 ol.plain-list { list-style: decimal; padding-left: 26px; }
 ol.plain-list li { padding-left: 4px; }
 ol.plain-list li::marker { color: var(--muted); font-weight: 600; }
@@ -139,23 +140,25 @@ ol.plain-list li::marker { color: var(--muted); font-weight: 600; }
 }
 
 /* ---------- Dashboard ---------- */
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+/* 7 kartu statistik selalu SATU baris: grid 7 kolom sama lebar di layar
+   lebar; di layar kecil jadi baris flex yang bisa digeser menyamping. */
+.stat-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 12px; margin: 16px 0; }
-.stat-card { display: flex; align-items: center; gap: 12px; background: #fff;
+.stat-card { display: flex; align-items: center; gap: 10px; background: #fff;
   border: 1px solid var(--garis); border-radius: var(--radius);
-  box-shadow: var(--shadow); padding: 16px; }
+  box-shadow: var(--shadow); padding: 14px 12px; min-width: 0; }
 .stat-ic { display: inline-flex; align-items: center; justify-content: center;
-  width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto; }
-.stat-ic svg { width: 22px; height: 22px; }
+  width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; }
+.stat-ic svg { width: 20px; height: 20px; }
 .stat-ic.hijau { background: var(--hijau-bg); color: var(--hijau); }
 .stat-ic.kuning { background: var(--kuning-bg); color: var(--kuning); }
 .stat-ic.biru { background: var(--biru-bg); color: var(--biru-t); }
 .stat-ic.ungu { background: var(--ungu-bg); color: var(--ungu); }
 .stat-ic.merah { background: var(--merah-bg); color: var(--merah); }
 .stat-ic.indigo { background: #e0e7ff; color: var(--indigo-dark); }
-.stat-txt { display: flex; flex-direction: column; line-height: 1.2; }
-.stat-txt b { font-size: 1.5rem; letter-spacing: -.01em; }
-.stat-txt small { color: var(--muted); font-weight: 550; }
+.stat-txt { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.stat-txt b { font-size: 1.35rem; letter-spacing: -.01em; }
+.stat-txt small { color: var(--muted); font-weight: 550; font-size: .82rem; }
 .quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px; margin: 16px 0; }
 .quick-card { display: flex; align-items: center; gap: 12px; padding: 16px;
@@ -304,6 +307,12 @@ table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
   .content { padding-bottom: 76px; }
   footer { padding-bottom: 8px; }
   .hasil-nama { font-size: 1.4rem; }
+  /* Kartu statistik tetap satu baris: geser menyamping, scrollbar disembunyikan. */
+  .stat-grid { display: flex; flex-wrap: nowrap; overflow-x: auto;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    padding: 4px 2px 12px; }
+  .stat-grid::-webkit-scrollbar { display: none; }
+  .stat-card { flex: 0 0 auto; min-width: 126px; }
 }
 
 /* ---------- Cetak: hanya lembar kartu ---------- */
