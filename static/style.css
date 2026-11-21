@@ -79,6 +79,20 @@ code { background: #eef1f8; padding: 1px 6px; border-radius: 6px; font-size: .88
 .topbar { display: none; }
 main { padding: 24px; max-width: 1080px; width: 100%; margin: 0 auto; flex: 1; }
 footer { padding: 16px 24px 24px; text-align: center; color: var(--muted); }
+/* Teks kecil footer (baris ©): lebih tebal agar terbaca di atas latar
+   apa pun, termasuk wallpaper yang terang/ramai. */
+footer small { font-weight: 650; color: #344054; }
+/* Wallpaper aktif (lapisan .bg-wallpaper adalah saudara sebelum .shell /
+   .auth-wrap): footer & teks bawah login duduk di atas selubung lembut
+   tembus pandang supaya tetap terbaca di wallpaper apa pun. Tanpa
+   wallpaper, footer tampil seperti biasa. */
+.bg-wallpaper ~ .shell footer { background: rgba(255,255,255,.45);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  border-radius: 14px; margin: 0 16px 16px; }
+.bg-wallpaper ~ .auth-wrap .auth-foot,
+.bg-wallpaper ~ .auth-wrap .lisensi { background: rgba(255,255,255,.45);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  border-radius: 10px; padding: 4px 14px; }
 .bottomnav { display: none; }
 
 /* ---------- Warna menu kustom (Pengaturan Tampilan -> Warna Menu) ----------
@@ -284,6 +298,11 @@ table.tabel.kelola th.no, table.tabel.kelola td.no { text-align: center; }
 table.tabel.kelola tbody tr:nth-child(even) { background: #fafbfe; }
 table.tabel.kelola tbody tr:hover { background: #f7f9ff; }
 table.tabel.kelola td.aksi { white-space: nowrap; }
+/* Lencana "Wali <Kelas>" di kolom Username Kelola Guru: guru yang sedang
+   menjadi wali kelas (satu-satunya guru yang punya login). */
+.wali-badge { display: inline-block; padding: 1px 8px; border-radius: 999px;
+  background: var(--indigo); color: #fff; font-size: .72rem; font-weight: 700;
+  white-space: nowrap; vertical-align: 1px; }
 .empty-state { text-align: center; padding: 32px 16px; color: var(--muted); }
 .empty-state svg { width: 40px; height: 40px; opacity: .45; }
 .empty-state p { margin: 8px 0 2px; font-weight: 650; color: #475467; }
@@ -366,12 +385,17 @@ table.tabel.kelola td.aksi { white-space: nowrap; }
 .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .auth-brand .brand-name { font-size: 1.25rem; }
 .auth-card h2 { margin-top: 4px; }
-.auth-foot { color: var(--muted); text-align: center; font-size: .88rem; margin: 0; }
+.auth-foot { color: #344054; text-align: center; font-size: .88rem; margin: 0;
+  font-weight: 650; }
 
-/* Label lisensi terkunci (env ABSEN_LISENSI): baris kecil redup di
-   bawah kartu login & di dalam footer. Hanya dirender server bila
-   env diisi; tidak terpengaruh tema pastel (di luar scope tema). */
-.lisensi { color: var(--muted); text-align: center; font-size: .82rem; margin: 0; }
+/* Label lisensi terkunci (env ABSEN_LISENSI): baris di bawah kartu login
+   & di dalam footer. Hanya dirender server bila env diisi; tidak
+   terpengaruh tema pastel (aturan ini sengaja di luar scope tema).
+   Huruf TEBAL + warna gelap + halo terang (text-shadow) supaya tetap
+   terbaca di atas wallpaper terang/ramai mana pun. */
+.lisensi { color: #14213d; text-align: center; font-size: .82rem; margin: 0;
+  font-weight: 700;
+  text-shadow: 0 1px 0 rgba(255,255,255,.75), 0 0 8px rgba(255,255,255,.65); }
 footer .lisensi { margin-top: 4px; }
 
 /* ---------- Mobile (<900px): topbar + bottom nav ---------- */
