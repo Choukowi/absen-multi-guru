@@ -45,6 +45,7 @@ TZ_JKT = ZoneInfo("Asia/Jakarta")
 
 JAM_BATAS_HADIR = dtime(7, 0)    # scan <= 07:00 -> Hadir
 JAM_BATAS_ALPA = dtime(9, 0)     # >= 09:00 belum scan -> Alpa otomatis
+JAM_PANEL_SELESAI = dtime(17, 0)  # >= 17:00 panel bawah dashboard hilang
 STATUS_LIST = ["Hadir", "Terlambat", "Sakit", "Izin", "Alpa"]
 NAMA_HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 NAMA_BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
@@ -684,8 +685,15 @@ class Handler(BaseHTTPRequestHandler):
         # kartu statistik kembali ke nilai AWAL hari (lihat di bawah).
         # pastikan_alpa di atas sudah berjalan, jadi daftar Belum Scan
         # lengkap pada saat laporan dibuat.
+        # Keputusan user berikutnya: mulai pukul 17:00 panel bawah
+        # HILANG sama sekali (tidak ada panel apa pun di slot itu) —
+        # halaman /laporan/siswa & /laporan/guru tetap bisa dibuka,
+        # hanya panel dashboard-nya yang disembunyikan. Kartu statistik
+        # TIDAK ikut berubah: tetap nilai reset sesudah 17:00.
         sudah_sembilan = now.time() >= JAM_BATAS_ALPA
-        panel_laporan = self._panel_laporan(conn, tgl) if sudah_sembilan else None
+        panel_selesai = now.time() >= JAM_PANEL_SELESAI
+        tampil_laporan = sudah_sembilan and not panel_selesai
+        panel_laporan = self._panel_laporan(conn, tgl) if tampil_laporan else None
         conn.close()
         # Nilai kartu dari catatan hari ini (dipakai sebelum 09:00).
         k_hadir_s = hitung[("siswa", "Hadir")] + hitung[("siswa", "Terlambat")]
@@ -724,8 +732,11 @@ class Handler(BaseHTTPRequestHandler):
             f'<span class="jam">{esc(r["jam"] or "")}</span></li>' for r in datang)
         items = items or '<li class="muted">Belum ada yang scan hari ini.</li>'
         if panel_laporan is None:
-            panel_laporan = ('<section class="card"><h3>Kedatangan Terakhir Hari Ini</h3>\n'
-                             f'<ul class="arrivals">{items}</ul></section>')
+            # Sesudah 17:00 slot panel bawah dikosongkan (tanpa judul,
+            # tanpa kartu kosong); sebelum 09:00 tampil daftar kedatangan.
+            panel_laporan = "" if panel_selesai else (
+                '<section class="card"><h3>Kedatangan Terakhir Hari Ini</h3>\n'
+                f'<ul class="arrivals">{items}</ul></section>')
         warn = ""
         if user["role"] == "admin" and verify_password("admin123", user["password_hash"], user["salt"]):
             warn = ('<div class="flash warn">PERINGATAN: akun admin ini masih memakai '

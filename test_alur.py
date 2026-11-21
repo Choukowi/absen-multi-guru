@@ -1677,6 +1677,60 @@ must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
      "penolakan tidak membuat/mengubah catatan apa pun")
 
 # ===========================================================================
+# Fase V — Keputusan user: panel bawah dashboard HILANG mulai pukul 17:00.
+# Pemilihan panel kini tiga arah: < 09:00 daftar Kedatangan Terakhir;
+# 09:00–<17:00 panel Laporan Hari Ini (dua kartu bisa diklik); >= 17:00
+# TIDAK ada panel apa pun di slot itu (tanpa judul, tanpa kartu kosong,
+# tanpa tautan /laporan/). Kartu statistik TIDAK ikut berubah (tetap
+# nilai reset sesudah 09:00), dan halaman /laporan/* tetap ada.
+# Memakai ulang tanggal & data Fase T (Senin 2026-11-23).
+# ===========================================================================
+
+# --- Senin 06:30: panel kedatangan tampil, panel laporan belum ada ---
+start_server(f"{TGL_T}T06:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must("Kedatangan Terakhir Hari Ini" in dash,
+     "dashboard 06:30: panel Kedatangan Terakhir Hari Ini tampil")
+must("Laporan Hari Ini" not in dash and 'href="/laporan/' not in dash,
+     "dashboard 06:30: panel Laporan Hari Ini belum tampil")
+
+# --- Senin 16:59: panel Laporan Hari Ini masih tampil penuh ---
+start_server(f"{TGL_T}T16:59:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must("Laporan Hari Ini" in dash,
+     "dashboard 16:59: panel Laporan Hari Ini masih tampil")
+must('href="/laporan/siswa"' in dash and 'href="/laporan/guru"' in dash,
+     "dashboard 16:59: kedua kartu laporan (Siswa & Guru) masih tertaut")
+
+# --- Senin 17:00 & 17:30: panel bawah HILANG; kartu tetap nilai reset ---
+for jam_v in ("17:00", "17:30"):
+    start_server(f"{TGL_T}T{jam_v}:00")
+    admin, url, _ = login("admin", "admin123")
+    s, url, dash = req(admin, "/dashboard")
+    must("Laporan Hari Ini" not in dash,
+         f"dashboard {jam_v}: panel Laporan Hari Ini sudah hilang")
+    must("Kedatangan Terakhir Hari Ini" not in dash,
+         f"dashboard {jam_v}: panel Kedatangan Terakhir juga tidak tampil")
+    must('href="/laporan/' not in dash,
+         f"dashboard {jam_v}: tidak ada tautan /laporan/ di dashboard")
+    must(angka_kartu(dash, "Siswa Belum Scan") == total_siswa_t,
+         f"dashboard {jam_v}: kartu Siswa Belum Scan tetap nilai reset "
+         f"(= total siswa {total_siswa_t})")
+    must(angka_kartu(dash, "Guru Belum Scan") == total_guru_t,
+         f"dashboard {jam_v}: kartu Guru Belum Scan tetap nilai reset "
+         f"(= total guru aktif {total_guru_t})")
+    must(angka_kartu(dash, "Siswa Hadir") == 0,
+         f"dashboard {jam_v}: kartu Siswa Hadir tetap 0 (reset)")
+
+# Halaman laporannya sendiri tetap bisa dibuka sesudah 17:00.
+s, url, lap_v = req(admin, "/laporan/siswa")
+must("Laporan Siswa Hari Ini" in lap_v,
+     "halaman /laporan/siswa tetap bisa dibuka sesudah 17:00 "
+     "(hanya panel dashboard yang disembunyikan)")
+
+# ===========================================================================
 # Fase U — Halaman laporan bisa dibuka SEMUA pengguna yang login (bukan
 # hanya admin): anonim diarahkan ke /login, dan guru yang login bisa
 # membuka /laporan/siswa & /laporan/guru dan melihat daftar yang sama.
