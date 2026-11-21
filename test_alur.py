@@ -1147,6 +1147,111 @@ must(angka_kartu(dash, "Siswa Alpa") == total_siswa_p - 2,
      "sesudah 09:00: kartu Siswa Alpa memuat Alpa otomatis untuk semua "
      "siswa tanpa catatan scan/manual")
 
+# ===========================================================================
+# Fase Q — Kartu statistik dashboard SATU baris. style.css: .stat-grid
+# memakai grid 7 kolom sama lebar (repeat(7, minmax(0, 1fr))) di layar
+# lebar, dan di layar kecil menjadi baris flex overflow-x:auto (kartu
+# flex: 0 0 auto, bisa digeser menyamping, tidak membungkus ke baris
+# kedua). Dashboard tetap merender tepat 7 kartu statistik.
+# ===========================================================================
+start_server()
+admin, url, _ = login("admin", "admin123")
+s, headers, css_bytes = req_bytes(admin, "/static/style.css")
+css_q = css_bytes.decode("utf-8", "replace")
+m_grid = re.search(r"\.stat-grid\s*\{([^}]*)\}", css_q)
+must(m_grid is not None and "repeat(7, minmax(0, 1fr))" in m_grid.group(1),
+     "style.css: .stat-grid memakai repeat(7, minmax(0, 1fr)) "
+     "(7 kartu statistik satu baris sama lebar)")
+must(re.search(r"\.stat-grid\s*\{[^}]*overflow-x:\s*auto", css_q) is not None,
+     "style.css: .stat-grid layar kecil memakai overflow-x: auto "
+     "(satu baris, geser menyamping)")
+must(re.search(r"\.stat-card\s*\{[^}]*flex:\s*0 0 auto", css_q) is not None
+     and re.search(r"\.stat-card\s*\{[^}]*min-width:\s*126px", css_q) is not None,
+     "style.css: .stat-card layar kecil flex: 0 0 auto + min-width 126px")
+s, url, dash_q = req(admin, "/dashboard")
+must(dash_q.count('<div class="stat-card">') == 7,
+     "dashboard merender tepat 7 kartu statistik")
+
+# ===========================================================================
+# Fase R — Nomor urut (No. 1, 2, 3, ...) di daftar nama siswa & guru:
+# Kelola Siswa, Kelola Guru, hasil /cari (tiap bagian mulai dari 1), dan
+# kolom pertama "No" pada tabel mingguan siswa & guru. Detail kelas sudah
+# memakai <ol> bernomor (marker desimal di CSS) — diverifikasi apa adanya.
+# Pemeriksaan bersifat sekuens: nomor yang terambil dari HTML harus
+# membentuk 1..N berurutan, tahan terhadap data uji kumulatif fase lain.
+# ===========================================================================
+admin, url, _ = login("admin", "admin123")
+
+
+def nomor_dari(htmltxt, pola):
+    return [int(x) for x in re.findall(pola, htmltxt)]
+
+
+def sekuens_utuh(angka):
+    return angka == list(range(1, len(angka) + 1))
+
+
+# --- Kelola Siswa: setiap baris bernomor urut 1..N sesuai urutan tampil ---
+s, url, hal_siswa = req(admin, "/admin/siswa")
+no_siswa = nomor_dari(hal_siswa, r'<span class="no">(\d+)\.</span>')
+must(len(no_siswa) >= 2 and sekuens_utuh(no_siswa),
+     "Kelola Siswa: nomor baris membentuk urutan 1..N "
+     f"(terambil {len(no_siswa)} baris)")
+must(re.search(r'<span class="no">1\.</span> <b>', hal_siswa) is not None
+     and re.search(r'<span class="no">2\.</span> <b>', hal_siswa) is not None,
+     "Kelola Siswa: baris pertama & kedua berawalan '1.' dan '2.' sebelum nama")
+# --- Kelola Guru: pola yang sama ---
+s, url, hal_guru = req(admin, "/admin/guru")
+no_guru = nomor_dari(hal_guru, r'<span class="no">(\d+)\.</span>')
+must(len(no_guru) >= 2 and sekuens_utuh(no_guru),
+     "Kelola Guru: nomor baris membentuk urutan 1..N "
+     f"(terambil {len(no_guru)} baris)")
+# --- /cari: bagian Siswa & Guru masing-masing bernomor mulai dari 1 ---
+s, url, hasil_cari = req(admin, "/cari?q=Cari")
+m_sis = re.search(r"<h3>Siswa</h3><ul class=\"plain-list\">(.*?)</ul>",
+                  hasil_cari, re.S)
+must(m_sis is not None, "/cari?q=Cari: bagian Siswa tampil")
+no_cari_siswa = nomor_dari(m_sis.group(1), r'<span class="no">(\d+)\.</span>')
+must(len(no_cari_siswa) >= 2 and sekuens_utuh(no_cari_siswa),
+     "/cari: baris bagian Siswa bernomor 1..N dari awal "
+     f"(terambil {len(no_cari_siswa)} baris)")
+m_gur = re.search(r"<h3>Guru</h3><ul class=\"plain-list\">(.*?)</ul>",
+                  hasil_cari, re.S)
+must(m_gur is not None, "/cari?q=Cari: bagian Guru tampil")
+no_cari_guru = nomor_dari(m_gur.group(1), r'<span class="no">(\d+)\.</span>')
+must(len(no_cari_guru) >= 1 and sekuens_utuh(no_cari_guru),
+     "/cari: baris bagian Guru bernomor mulai dari 1 lagi "
+     f"(terambil {len(no_cari_guru)} baris)")
+# --- detail kelas: <ol class="plain-list"> bernomor via marker desimal CSS ---
+kc_r = dbq("SELECT id FROM classes WHERE nama='UJI-Kelas-Cari'")
+s, url, hal_detail = req(admin, f"/admin/kelas/{kc_r}")
+must('<ol class="plain-list">' in hal_detail,
+     "detail kelas: daftar siswa memakai <ol> (nomor urut bawaan)")
+s, headers, css_r_bytes = req_bytes(admin, "/static/style.css")
+css_r = css_r_bytes.decode("utf-8", "replace")
+must(re.search(r"ol\.plain-list\s*\{[^}]*list-style:\s*decimal", css_r) is not None,
+     "style.css: ol.plain-list memakai list-style: decimal (nomor tampil)")
+must(re.search(r"\.plain-list li \.no\s*\{", css_r) is not None,
+     "style.css: .plain-list li .no ada (nomor daftar tampil redup)")
+# --- tabel mingguan siswa: kolom pertama "No", sel data 1, 2, ... ---
+s, url, tab_siswa = req(admin, f"/tabel-siswa?kelas={kc_r}")
+must('<th class="no">No</th>' in tab_siswa,
+     "tabel siswa: kepala kolom pertama 'No'")
+no_tab_siswa = nomor_dari(tab_siswa, r'<td class="no">(\d+)</td>')
+must(len(no_tab_siswa) >= 2 and no_tab_siswa[0] == 1 and no_tab_siswa[1] == 2
+     and sekuens_utuh(no_tab_siswa),
+     "tabel siswa: sel No baris pertama '1', kedua '2', lalu berurutan "
+     f"(terambil {len(no_tab_siswa)} baris)")
+# --- tabel mingguan guru: pola yang sama ---
+s, url, tab_guru = req(admin, "/tabel-guru")
+must('<th class="no">No</th>' in tab_guru,
+     "tabel guru: kepala kolom pertama 'No'")
+no_tab_guru = nomor_dari(tab_guru, r'<td class="no">(\d+)</td>')
+must(len(no_tab_guru) >= 2 and no_tab_guru[0] == 1 and no_tab_guru[1] == 2
+     and sekuens_utuh(no_tab_guru),
+     "tabel guru: sel No baris pertama '1', kedua '2', lalu berurutan "
+     f"(terambil {len(no_tab_guru)} baris)")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)

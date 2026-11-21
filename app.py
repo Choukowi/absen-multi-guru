@@ -1504,21 +1504,23 @@ def _cari(self, user, qs, flash):
     bagian = ""
     if siswa_rows:
         items = ""
-        for r in siswa_rows:
+        for i, r in enumerate(siswa_rows):
             if admin:
                 tautan = (f' &mdash; <a href="/admin/kelas/{r["class_id"]}">Lihat Kelas</a>'
                           f' &mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a>')
             else:
                 tautan = f' &mdash; <a href="/tabel-siswa?kelas={r["class_id"]}">Lihat Kelas</a>'
-            items += (f'<li><b>{esc(r["nama"])}</b> &mdash; NIS: '
-                      f'<code>{esc(r["kode"])}</code> &mdash; {esc(r["kelas"])}{tautan}</li>')
+            items += (f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
+                      f'&mdash; NIS: <code>{esc(r["kode"])}</code> '
+                      f'&mdash; {esc(r["kelas"])}{tautan}</li>')
         bagian += f'<div class="card"><h3>Siswa</h3><ul class="plain-list">{items}</ul></div>'
     if guru_rows:
         items = ""
-        for r in guru_rows:
+        for i, r in enumerate(guru_rows):
             tautan = (f' &mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a>'
                       if admin else "")
-            items += (f'<li><b>{esc(r["nama"])}</b> &mdash; {esc(r["mapel"] or "—")} '
+            items += (f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
+                      f'&mdash; {esc(r["mapel"] or "—")} '
                       f'&mdash; username: <code>{esc(r["username"])}</code> '
                       f'&mdash; kode QR: <code>{esc(r["kode_qr"] or "-")}</code>{tautan}</li>')
         bagian += f'<div class="card"><h3>Guru</h3><ul class="plain-list">{items}</ul></div>'
@@ -1541,9 +1543,10 @@ def _admin_guru(self, user, flash):
            FROM users u WHERE u.role='guru' ORDER BY u.nama""").fetchall()
     conn.close()
     items = ""
-    for r in rows:
+    for i, r in enumerate(rows):
         nama_js = js_str(r["nama"])
-        dasar = (f'<li><b>{esc(r["nama"])}</b> &mdash; {esc(r["mapel"] or "-")} '
+        dasar = (f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
+                 f'&mdash; {esc(r["mapel"] or "-")} '
                  f'&mdash; username: <code>{esc(r["username"])}</code> '
                  f'&mdash; kode QR: <code>{esc(r["kode_qr"] or "-")}</code> '
                  f'&mdash; <a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
@@ -1852,10 +1855,11 @@ def _admin_siswa(self, user, qs, flash):
            ORDER BY c.nama, s.nama""").fetchall()
     conn.close()
     items = ""
-    for r in rows:
+    for i, r in enumerate(rows):
         confirm_msg = f"Hapus siswa {js_str(r['nama'])}? Catatan kehadirannya juga akan terhapus."
         items += (
-            f'<li><b>{esc(r["nama"])}</b> &mdash; NIS: <code>{esc(r["kode"])}</code> '
+            f'<li><span class="no">{i + 1}.</span> <b>{esc(r["nama"])}</b> '
+            f'&mdash; NIS: <code>{esc(r["kode"])}</code> '
             f'&mdash; {esc(r["kelas"])} '
             f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
             f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
