@@ -177,6 +177,24 @@ ul.arrivals .jam { margin-left: auto; font-variant-numeric: tabular-nums; font-w
 .laporan h4 { margin: 16px 0 0; font-size: 1rem; }
 .laporan h4:first-of-type { margin-top: 8px; }
 .laporan .jam { font-weight: 650; font-variant-numeric: tabular-nums; }
+/* Panel laporan dashboard: dua kartu kolom (Siswa | Guru) yang bisa
+   diklik menuju halaman daftarnya; menumpuk di layar sempit. */
+.laporan-grid { display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; margin-top: 12px; }
+.laporan-card { display: flex; flex-direction: column; gap: 4px;
+  padding: 16px 18px; background: #f8fafc; border: 1px solid var(--garis);
+  border-radius: var(--radius); color: var(--teks); text-decoration: none;
+  transition: transform .12s ease, box-shadow .15s ease, border-color .15s ease; }
+.laporan-card:hover { transform: translateY(-2px); box-shadow: var(--shadow);
+  border-color: var(--indigo); }
+.laporan-nama { font-size: 1.12rem; font-weight: 750; }
+.laporan-baris { color: var(--muted); font-weight: 550; }
+.laporan-baris b { color: var(--teks); font-size: 1.05rem; }
+.laporan-klik { margin-top: 6px; color: var(--indigo-dark);
+  font-weight: 650; font-size: .9rem; }
+@media (max-width: 640px) {
+  .laporan-grid { grid-template-columns: 1fr; }
+}
 
 /* ---------- Pil status ---------- */
 .pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
