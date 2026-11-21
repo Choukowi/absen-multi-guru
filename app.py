@@ -338,8 +338,16 @@ def layout(user, title, body, flash="", aktif=""):
     bg_style = f' style="background-color:{peng["bg_color"]}"'
     wp_layer = ""
     if peng["wallpaper"]:
+        # Tingkat kejelasan tersimpan -> variabel --wp-alpha menimpa alpha
+        # bawaan .86 di style.css. Belum pernah diatur -> tanpa penimpa,
+        # tampilan persis seperti sebelumnya.
+        gaya_wp = ""
+        mentah_wp = (peng.get("kejelasan_wp") or "").strip().lower()
+        if mentah_wp in KEJELASAN_WP:
+            gaya_wp = f";--wp-alpha:{KEJELASAN_WP[mentah_wp]}"
         wp_layer = (f'<div class="bg-wallpaper" '
-                    f'style="background-image:url(\'/wallpaper/{esc(peng["wallpaper"])}\')"></div>')
+                    f'style="background-image:url(\'/wallpaper/{esc(peng["wallpaper"])}\')'
+                    f'{gaya_wp}"></div>')
     tahun = waktu_sekarang().year
     if not user:
         return f"""<!DOCTYPE html>
@@ -614,6 +622,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/tampilan": return self.post_admin_tampilan(f)
             if path == "/admin/tampilan/warna-menu":
                 return self.post_admin_tampilan_warna_menu(f)
+            if path == "/admin/tampilan/kejelasan-wp":
+                return self.post_admin_tampilan_kejelasan_wp(f)
             if path == "/admin/tampilan/wallpaper/hapus":
                 return self.post_admin_tampilan_wallpaper_hapus()
             if path == "/admin/tampilan/logo/hapus":
@@ -1573,6 +1583,18 @@ BG_DEFAULT = "#f3f5fb"
 # bawaan (menu putih). Preset diawali Putih sebagai pilihan bawaan/reset.
 MENU_PRESETS = ["#ffffff"] + [w for w in BG_PRESETS if w != "#ffffff"]
 TEKS_MENU_GELAP = "#1c2333"  # teks di atas warna menu yang terang (= --teks)
+# Kejelasan wallpaper: kekuatan lapisan putih di atas gambar wallpaper
+# (style.css .bg-wallpaper::after). Kunci settings 'kejelasan_wp' menyimpan
+# nama tingkatnya; kosong/tidak sah = 'samar' (tampilan seperti sekarang).
+KEJELASAN_WP = {"samar": "0.86", "sedang": "0.65", "jelas": "0.45"}
+KEJELASAN_WP_DEFAULT = "samar"
+
+
+def kejelasan_wp(peng):
+    """Nama tingkat kejelasan wallpaper yang berlaku dari pengaturan
+    (nama tersimpan yang sah, selain itu tingkat bawaan 'samar')."""
+    nama = (peng.get("kejelasan_wp") or "").strip().lower()
+    return nama if nama in KEJELASAN_WP else KEJELASAN_WP_DEFAULT
 
 
 def _rgb_hex(hexs):
@@ -1621,7 +1643,7 @@ WALLPAPER_NAMA_RE = re.compile(r"^[0-9a-f]{24}\.(jpg|jpeg|png|webp)$")
 def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
     peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": "",
-            "warna_menu": ""}
+            "warna_menu": "", "kejelasan_wp": ""}
     try:
         conn = db()
         for r in conn.execute("SELECT key, value FROM settings").fetchall():
@@ -1634,6 +1656,9 @@ def get_pengaturan():
         peng["bg_color"] = BG_DEFAULT
     if peng["warna_menu"] and not re.match(r"^#[0-9a-fA-F]{6}$", peng["warna_menu"]):
         peng["warna_menu"] = ""
+    if peng["kejelasan_wp"] and \
+            peng["kejelasan_wp"].strip().lower() not in KEJELASAN_WP:
+        peng["kejelasan_wp"] = ""
     if peng["wallpaper"] and not WALLPAPER_NAMA_RE.match(peng["wallpaper"]):
         peng["wallpaper"] = ""
     if peng["logo"] and not WALLPAPER_NAMA_RE.match(peng["logo"]):
@@ -2179,6 +2204,16 @@ def _admin_tampilan(self, user, flash):
                           f'<input type="radio" name="warna_menu" value="{warna}"{cek}>'
                           f'<span style="background:{warna}"></span></label>')
     cek_menu_kustom = "" if menu_ini in [w.lower() for w in MENU_PRESETS] else " checked"
+    # Kejelasan wallpaper: radio tiga tingkat; yang tercentang = tingkat
+    # yang berlaku ('samar' selama belum pernah diatur).
+    jelas_ini = kejelasan_wp(peng)
+    radio_jelas = ""
+    for nilai_j, label_j in (("samar", "Samar (seperti sekarang)"),
+                             ("sedang", "Sedang"),
+                             ("jelas", "Jelas")):
+        cek_j = " checked" if jelas_ini == nilai_j else ""
+        radio_jelas += (f'<label><input type="radio" name="kejelasan_wp" '
+                        f'value="{nilai_j}"{cek_j}> {label_j}</label>')
     wp_html = ""
     if peng["wallpaper"]:
         wp_html = f"""<div class="wp-preview"><img src="/wallpaper/{esc(peng['wallpaper'])}"
@@ -2235,7 +2270,15 @@ def _admin_tampilan(self, user, flash):
     <form method="post" action="/admin/tampilan/wallpaper" enctype="multipart/form-data">
       <label>Unggah / ganti wallpaper <input type="file" name="wallpaper"
         accept=".jpg,.jpeg,.png,.webp" required></label>
-      <button type="submit" class="btn btn-primary">Unggah Wallpaper</button></form></div>
+      <button type="submit" class="btn btn-primary">Unggah Wallpaper</button></form>
+    <form method="post" action="/admin/tampilan/kejelasan-wp">
+      <label>Kejelasan wallpaper</label>
+      <div class="pilihan-radio">{radio_jelas}</div>
+      <p class="muted"><small>Seberapa jelas gambar wallpaper terlihat di
+      balik lapisan terang. Samar = tampilan seperti sekarang; Jelas =
+      gambar paling menonjol. Berlaku juga untuk wallpaper yang baru
+      diunggah nanti.</small></p>
+      <button type="submit" class="btn btn-primary">Simpan Kejelasan</button></form></div>
     <div class="card form-card"><h3>Logo Sekolah</h3>
     <p class="muted">Logo tampil sebagai tanda brand di menu samping, bilah atas,
     dan halaman login &mdash; menggantikan ikon bawaan. Nama sekolah di sebelahnya
@@ -2274,6 +2317,19 @@ def _post_admin_tampilan_warna_menu(self, f):
     set_pengaturan(conn, "warna_menu", warna.lower())
     conn.commit(); conn.close()
     return self.redirect("/admin/tampilan", "Warna menu disimpan.")
+
+
+def _post_admin_tampilan_kejelasan_wp(self, f):
+    nama = (f.get("kejelasan_wp") or "").strip().lower()
+    if nama not in KEJELASAN_WP:
+        # Nilai tidak sah: ditolak, pengaturan lama tidak berubah.
+        return self.redirect("/admin/tampilan",
+                             "Kejelasan wallpaper tidak valid; "
+                             "pengaturan tidak berubah.")
+    conn = db()
+    set_pengaturan(conn, "kejelasan_wp", nama)
+    conn.commit(); conn.close()
+    return self.redirect("/admin/tampilan", "Kejelasan wallpaper disimpan.")
 
 
 def _post_admin_tampilan_wallpaper(self):
@@ -2565,6 +2621,7 @@ Handler.post_admin_siswa_hapus = _post_admin_siswa_hapus
 Handler.admin_tampilan = _admin_tampilan
 Handler.post_admin_tampilan = _post_admin_tampilan
 Handler.post_admin_tampilan_warna_menu = _post_admin_tampilan_warna_menu
+Handler.post_admin_tampilan_kejelasan_wp = _post_admin_tampilan_kejelasan_wp
 Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
 Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
 Handler.wallpaper_file = _wallpaper_file

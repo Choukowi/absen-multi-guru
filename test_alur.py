@@ -1925,6 +1925,100 @@ must("Pengaturan tampilan disimpan." in hasil
      and setting_w("bg_color") == "#123abc",
      "posting bg_color=kustom dengan #123abc tetap tersimpan")
 
+# ===========================================================================
+# Fase Y — Kejelasan Wallpaper: lapisan putih di atas wallpaper (CSS
+# .bg-wallpaper::after, alpha bawaan .86) bisa diatur kekuatannya dari
+# Pengaturan Tampilan (kunci settings 'kejelasan_wp'): samar .86 =
+# tampilan seperti sekarang & bawaan, sedang .65, jelas .45. Belum
+# diatur -> halaman ber-wallpaper dirender TANPA penimpa --wp-alpha.
+# Nilai tidak sah ditolak tanpa mengubah pengaturan; guru tidak boleh
+# mengubah; bisa disimpan walau belum ada wallpaper (berlaku begitu
+# wallpaper diunggah).
+# ===========================================================================
+must(setting_w("kejelasan_wp") is None,
+     "kejelasan wallpaper belum pernah diatur: kunci kejelasan_wp "
+     "belum ada di settings")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+must('action="/admin/tampilan/kejelasan-wp"' in hal_tampilan,
+     "Pengaturan Tampilan memuat form Kejelasan Wallpaper")
+must('name="kejelasan_wp" value="samar" checked' in hal_tampilan
+     and 'name="kejelasan_wp" value="sedang"' in hal_tampilan
+     and 'name="kejelasan_wp" value="jelas"' in hal_tampilan,
+     "tiga pilihan kejelasan tampil; tingkat yang berlaku ('samar') "
+     "tercentang")
+
+# Bisa disimpan SEBELUM ada wallpaper apa pun.
+s, url, hasil = req(admin, "/admin/tampilan/kejelasan-wp",
+                    {"kejelasan_wp": "sedang"})
+must("Kejelasan wallpaper disimpan." in hasil,
+     "simpan kejelasan 'sedang' berhasil (belum ada wallpaper)")
+must(setting_w("kejelasan_wp") == "sedang",
+     "kejelasan 'sedang' tersimpan di settings")
+
+# Pasang wallpaper -> lapisan memakai alpha tingkat tersimpan (.65).
+s, url, hasil = unggah(admin, "/admin/tampilan/wallpaper", "wallpaper",
+                       "wallpaper.png", PNG_1PX)
+must("Wallpaper dipasang." in hasil, "unggah wallpaper untuk Fase Y berhasil")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+m_wp_y = re.search(r"/wallpaper/([0-9a-f]{24}\.png)", hal_tampilan)
+must(m_wp_y is not None, "halaman tampilan menampilkan wallpaper Fase Y")
+nama_wp_y = m_wp_y.group(1)
+s, url, login_page = req(anon, "/login")
+must(f"/wallpaper/{nama_wp_y}" in login_page
+     and "--wp-alpha:0.65" in login_page,
+     "halaman login: wallpaper tampil dengan --wp-alpha:0.65 (sedang)")
+
+s, url, hasil = req(admin, "/admin/tampilan/kejelasan-wp",
+                    {"kejelasan_wp": "jelas"})
+must("Kejelasan wallpaper disimpan." in hasil
+     and setting_w("kejelasan_wp") == "jelas",
+     "simpan kejelasan 'jelas' berhasil")
+s, url, login_page = req(anon, "/login")
+must("--wp-alpha:0.45" in login_page,
+     "halaman login memakai --wp-alpha:0.45 (jelas)")
+
+s, url, hasil = req(admin, "/admin/tampilan/kejelasan-wp",
+                    {"kejelasan_wp": "samar"})
+must("Kejelasan wallpaper disimpan." in hasil
+     and setting_w("kejelasan_wp") == "samar",
+     "simpan kejelasan 'samar' berhasil")
+s, url, login_page = req(anon, "/login")
+must("--wp-alpha:0.86" in login_page,
+     "halaman login memakai --wp-alpha:0.86 (samar, eksplisit)")
+s, url, hal_tampilan = req(admin, "/admin/tampilan")
+must('name="kejelasan_wp" value="samar" checked' in hal_tampilan,
+     "halaman tampilan menandai tingkat 'samar' yang sedang aktif")
+
+s, url, hasil = req(admin, "/admin/tampilan/kejelasan-wp",
+                    {"kejelasan_wp": "acak"})
+must("Kejelasan wallpaper tidak valid" in hasil,
+     "nilai kejelasan tidak sah ditolak dengan pesan jelas")
+must(setting_w("kejelasan_wp") == "samar",
+     "nilai tidak sah tidak mengubah kejelasan tersimpan")
+s, url, login_page = req(anon, "/login")
+must("--wp-alpha:0.86" in login_page,
+     "sesudah penolakan, alpha tetap .86")
+
+try:
+    req(guru, "/admin/tampilan/kejelasan-wp", {"kejelasan_wp": "jelas"})
+    must(False, "guru mengubah kejelasan wallpaper harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "guru POST kejelasan wallpaper -> 404")
+must(setting_w("kejelasan_wp") == "samar",
+     "percobaan guru tidak mengubah kejelasan wallpaper")
+
+# Kembali ke keadaan belum diatur: halaman ber-wallpaper TANPA penimpa.
+conn = sqlite3.connect(DBUJI)
+conn.execute("DELETE FROM settings WHERE key='kejelasan_wp'")
+conn.commit(); conn.close()
+s, url, login_page = req(anon, "/login")
+must(f"/wallpaper/{nama_wp_y}" in login_page
+     and "--wp-alpha" not in login_page,
+     "belum diatur: wallpaper tampil tanpa penimpa --wp-alpha "
+     "(CSS memakai alpha bawaan .86)")
+s, url, hasil = req(admin, "/admin/tampilan/wallpaper/hapus", {})
+must("Wallpaper dihapus." in hasil, "wallpaper Fase Y dibersihkan lagi")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)
