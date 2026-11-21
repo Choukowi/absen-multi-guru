@@ -76,6 +76,28 @@ main { padding: 24px; max-width: 1080px; width: 100%; margin: 0 auto; flex: 1; }
 footer { padding: 16px 24px 24px; text-align: center; color: var(--muted); }
 .bottomnav { display: none; }
 
+/* ---------- Warna menu kustom (Pengaturan Tampilan -> Warna Menu) ----------
+   Aktif hanya bila admin memilih warna menu: layout() memberi <body> kelas
+   .menu-kustom dan variabel --warna-menu/--teks-menu (teks dihitung dari
+   luminansi warna pilihan). Tanpa itu, tampilan menu bawaan di atas berlaku
+   apa adanya. Pil aktif/hover memakai lapisan transparan warna teks agar
+   tetap jelas di atas warna menu terang maupun gelap. */
+body.menu-kustom .sidebar { background: var(--warna-menu);
+  border-right-color: transparent; }
+body.menu-kustom .brand-name { color: var(--teks-menu); }
+body.menu-kustom .nav-item { color: var(--teks-menu-redup); }
+body.menu-kustom .nav-item:hover { background: var(--menu-hover);
+  color: var(--teks-menu); }
+body.menu-kustom .nav-item.aktif { background: var(--menu-aktif);
+  color: var(--teks-menu); }
+body.menu-kustom .userchip { background: var(--menu-hover);
+  border-color: transparent; }
+body.menu-kustom .uinfo b { color: var(--teks-menu); }
+body.menu-kustom .uinfo small { color: var(--teks-menu-redup); }
+body.menu-kustom .logout-btn { color: var(--teks-menu-redup); }
+body.menu-kustom .logout-btn:hover { background: var(--menu-hover);
+  color: var(--teks-menu); }
+
 /* ---------- Kartu, tombol, form ---------- */
 .card { background: #fff; border: 1px solid var(--garis); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 20px; margin: 16px 0; }
@@ -327,6 +349,17 @@ table.tabel td.tot-hari { font-size: .8rem; line-height: 1.45; }
     transition: color .15s ease, background .15s ease; }
   .bnav-item svg { width: 22px; height: 22px; }
   .bnav-item.aktif { color: var(--indigo); background: #eef1fb; }
+  /* Warna menu kustom juga berlaku untuk bilah atas & menu bawah mobile. */
+  body.menu-kustom .topbar { background: var(--warna-menu);
+    color: var(--teks-menu); }
+  body.menu-kustom .topbar .brand-mark { background: var(--menu-hover); }
+  body.menu-kustom .topbar .brand-mark.has-logo { background: #fff; }
+  body.menu-kustom .topbar .avatar { background: var(--menu-hover); }
+  body.menu-kustom .bottomnav { background: var(--warna-menu);
+    border-top-color: transparent; }
+  body.menu-kustom .bnav-item { color: var(--teks-menu-redup); }
+  body.menu-kustom .bnav-item.aktif { color: var(--teks-menu);
+    background: var(--menu-aktif); }
   .content { padding-bottom: 76px; }
   footer { padding-bottom: 8px; }
   .hasil-nama { font-size: 1.4rem; }
