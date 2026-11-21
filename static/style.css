@@ -120,6 +120,14 @@ ol.plain-list { list-style: decimal; padding-left: 26px; }
 ol.plain-list li { padding-left: 4px; }
 ol.plain-list li::marker { color: var(--muted); font-weight: 600; }
 
+/* ---------- Pencarian (dashboard & halaman /cari) ---------- */
+.search-card { padding: 16px 20px; }
+.search-form { display: flex; gap: 12px; align-items: flex-end; }
+.search-form .search-label { flex: 1; margin: 0; }
+@media (max-width: 640px) {
+  .search-form { flex-direction: column; align-items: stretch; }
+}
+
 /* ---------- Dashboard ---------- */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px; margin: 16px 0; }
