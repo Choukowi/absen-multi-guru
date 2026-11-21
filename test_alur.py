@@ -31,7 +31,7 @@ UPLOAD_DIR = os.path.join(PROJ, "data", "uploads")
 _proc = None
 
 
-def start_server(override=None, dbfile=None):
+def start_server(override=None, dbfile=None, extra_env=None):
     global _proc
     stop_server()
     env = dict(os.environ)
@@ -41,6 +41,12 @@ def start_server(override=None, dbfile=None):
         env["ABSEN_NOW_OVERRIDE"] = override
     else:
         env.pop("ABSEN_NOW_OVERRIDE", None)
+    # Env tambahan per skenario (mis. ABSEN_LISENSI pada Fase AA):
+    # kunci yang dikenal selalu dibersihkan dulu agar tidak bocor
+    # antar skenario, lalu extra_env diterapkan.
+    env.pop("ABSEN_LISENSI", None)
+    if extra_env:
+        env.update(extra_env)
     _proc = subprocess.Popen([sys.executable, os.path.join(PROJ, "app.py")],
                              env=env, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
@@ -2163,6 +2169,53 @@ os.remove(DBZ)
 s, url, hasil = req(admin, "/admin/tampilan/tema", {"tema": ""})
 must("Tema disimpan." in hasil and setting_z("tema") in ("", None),
      "tema dikembalikan ke Default di akhir Fase Z")
+
+# ===========================================================================
+# Fase AA — Label lisensi TERKUNCI (env ABSEN_LISENSI): nama sekolah
+# pembeli dipasang PENJUAL di server per pemasangan. Label tampil di
+# bawah kartu login dan di footer aplikasi, tetapi TIDAK disimpan di
+# tabel settings, TIDAK ikut backup, dan TIDAK bisa diubah dari dalam
+# aplikasi (tidak ada kolom/formulir lisensi di halaman mana pun).
+# Env tidak diisi -> label tidak tampil sama sekali (perilaku lama).
+# ===========================================================================
+start_server(extra_env={"ABSEN_LISENSI": "SEKOLAH UJI LISENSI"})
+anon = client()
+s, url, login_page = req(anon, "/login")
+must("Dilisensikan untuk: SEKOLAH UJI LISENSI" in login_page,
+     "LISENSI: halaman login menampilkan label dari env ABSEN_LISENSI")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must("Dilisensikan untuk: SEKOLAH UJI LISENSI" in dash,
+     "LISENSI: footer dashboard menampilkan label lisensi")
+
+# Tidak ada cara mengubahnya dari dalam aplikasi: halaman-halaman
+# pengaturan tidak memuat kolom bernama lisensi, dan teks label tidak
+# muncul di dalam formulir mana pun (label hanya hidup di luar form:
+# bawah kartu login & footer).
+for path_cek in ("/admin/tampilan", "/admin/backup", "/ganti-password"):
+    s, url, hal = req(admin, path_cek)
+    nama_kolom = re.findall(r'name="([^"]+)"', hal)
+    must(all("lisensi" not in n.lower() for n in nama_kolom),
+         f"LISENSI: {path_cek} tidak memuat kolom formulir lisensi")
+    for blok_form in re.findall(r"<form.*?</form>", hal, re.S):
+        must("Dilisensikan untuk" not in blok_form,
+             f"LISENSI: label tidak muncul di dalam formulir {path_cek}")
+
+# Label murni dari env: database tidak menyimpan kunci lisensi apa pun.
+must(dbq("SELECT COUNT(*) FROM settings WHERE LOWER(key) LIKE '%lisensi%'")
+     == 0,
+     "LISENSI: tabel settings tidak memuat kunci lisensi apa pun")
+
+# Env tidak diisi -> label hilang total, halaman seperti semula.
+start_server()
+anon = client()
+s, url, login_page = req(anon, "/login")
+must("Dilisensikan untuk" not in login_page,
+     "LISENSI: tanpa env, halaman login tanpa label (perilaku lama)")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must("Dilisensikan untuk" not in dash,
+     "LISENSI: tanpa env, footer dashboard tanpa label (perilaku lama)")
 
 stop_server()
 if os.path.exists(DBUJI):

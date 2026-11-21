@@ -172,6 +172,21 @@ start command: `python3 app.py`, health check `/login`.
   (Let's Encrypt), dan **backup berkala** file DB + folder `data/uploads/`
   — seluruh data sekolah ada di keduanya.
 
+## Lisensi per pemasangan
+
+Setiap pemasangan untuk sekolah pembeli dapat diberi label lisensi
+terkunci: isi variabel environment **`ABSEN_LISENSI`** di server
+(mis. Variables pada layanan Railway) dengan nama sekolah pembeli,
+contoh `ABSEN_LISENSI="KIRIN ART SCHOOL"`. Nama itu tampil sebagai
+baris kecil "Dilisensikan untuk: …" di bawah kartu login dan di
+footer aplikasi. Label ini **hanya** berasal dari environment server:
+tidak disimpan di database, tidak ikut dalam Backup & Pulihkan, tidak
+muncul di halaman pengaturan mana pun, dan **tidak bisa diubah atau
+dihapus dari dalam aplikasi** — sekolah pemakai tidak punya cara
+menggantinya lewat web. Kosongkan/hapus variabelnya bila label tidak
+diinginkan (mis. pada pemasangan demo milik sendiri); halaman lalu
+tampil persis seperti tanpa fitur ini.
+
 ## Keterbatasan yang diketahui
 
 - Kamera fisik tidak dapat diuji di VM pengembangan; logika scan diuji

@@ -74,6 +74,20 @@ def waktu_sekarang():
     return datetime.now(TZ_JKT)
 
 
+def lisensi_label():
+    """Nama pemegang lisensi pemasangan ini, dari env ABSEN_LISENSI.
+
+    Diisi PENJUAL di server (mis. Variables pada layanan Railway) per
+    sekolah pembeli. SENGAJA tidak disimpan di tabel settings, tidak
+    tampil di formulir mana pun, dan tidak bisa diubah/dihapus dari
+    dalam aplikasi — sekolah pemakai hanya melihat labelnya. Env
+    dibaca setiap pemanggilan (pola yang sama seperti
+    ABSEN_NOW_OVERRIDE). Kosong/tidak diisi -> "" (label tidak
+    ditampilkan sama sekali, tampilan persis seperti sebelumnya).
+    """
+    return os.environ.get("ABSEN_LISENSI", "").strip()
+
+
 def fmt_tanggal(d):
     """date -> '16 November 2026'."""
     return f"{d.day} {NAMA_BULAN[d.month - 1]} {d.year}"
@@ -386,6 +400,12 @@ def layout(user, title, body, flash="", aktif=""):
                     f'style="background-image:url(\'/wallpaper/{esc(peng["wallpaper"])}\')'
                     f'{gaya_wp}"></div>')
     tahun = waktu_sekarang().year
+    # Label lisensi terkunci (env ABSEN_LISENSI): hanya dirender bila
+    # penjual memasangnya di server; selain itu halaman persis seperti
+    # sebelumnya, tanpa baris kosong.
+    lis = lisensi_label()
+    lisensi_html = (f'<p class="lisensi">Dilisensikan untuk: {esc(lis)}</p>'
+                    if lis else "")
     if not user:
         return f"""<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
@@ -397,7 +417,7 @@ def layout(user, title, body, flash="", aktif=""):
 <div class="auth-brand">{brand_mark(peng)}
 <span class="brand-name">{esc(nama_app)}</span></div>
 {flash_html}{body}</div>
-<p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
+{lisensi_html}<p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
 </div><script src="/static/app.js"></script></body></html>"""
     menu_style, nama_kelas_menu = gaya_menu(peng)
     if tema:
@@ -440,7 +460,7 @@ def layout(user, title, body, flash="", aktif=""):
 <header class="topbar">{brand_mark(peng, sm=True)}
 <span class="topbar-title">{esc(nama_app)}</span><span class="avatar">{initial}</span></header>
 <main>{flash_html}{body}</main>
-<footer><small>&copy; {tahun} {esc(nama_app)} &bull; Absensi gerbang sekolah &bull; QR Code biasa (bukan QRIS pembayaran)</small></footer>
+<footer><small>&copy; {tahun} {esc(nama_app)} &bull; Absensi gerbang sekolah &bull; QR Code biasa (bukan QRIS pembayaran)</small>{lisensi_html}</footer>
 </div>
 <nav class="bottomnav">{bottomnav}</nav>
 </div><script src="/static/app.js"></script></body></html>"""
