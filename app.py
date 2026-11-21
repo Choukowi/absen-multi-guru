@@ -646,8 +646,22 @@ class Handler(BaseHTTPRequestHandler):
                     "SELECT COUNT(*) c FROM kehadiran WHERE tanggal=? AND ref_type=? AND status=?",
                     (tgl, tipe, st)).fetchone()["c"]
         total_siswa = conn.execute("SELECT COUNT(*) c FROM students").fetchone()["c"]
-        tercatat_siswa = sum(hitung[("siswa", s)] for s in STATUS_LIST)
+        # "Belum Scan" = total - yang SUDAH scan / dicatat manual hari ini.
+        # Catatan Alpa OTOMATIS (metode='auto') TIDAK mengurangi: siswa/guru
+        # itu tidak pernah scan, jadi tetap terhitung "belum scan" sepanjang
+        # hari walau status resminya sudah Alpa. Alpa MANUAL tetap mengurangi
+        # (sudah ada keterangan dari petugas), begitu juga Sakit/Izin manual.
+        tercatat_siswa = conn.execute(
+            "SELECT COUNT(*) c FROM kehadiran WHERE tanggal=? AND ref_type='siswa' "
+            "AND NOT (metode='auto' AND status='Alpa')", (tgl,)).fetchone()["c"]
         belum = max(total_siswa - tercatat_siswa, 0)
+        total_guru = conn.execute(
+            "SELECT COUNT(*) c FROM users WHERE role='guru' AND aktif=1").fetchone()["c"]
+        tercatat_guru = conn.execute(
+            "SELECT COUNT(*) c FROM kehadiran k JOIN users u ON u.id=k.ref_id "
+            "WHERE k.tanggal=? AND k.ref_type='guru' AND u.role='guru' AND u.aktif=1 "
+            "AND NOT (k.metode='auto' AND k.status='Alpa')", (tgl,)).fetchone()["c"]
+        belum_guru = max(total_guru - tercatat_guru, 0)
         datang = conn.execute(
             """SELECT k.status, k.jam, s.nama AS nama, c.nama AS sub, 'siswa' AS tipe
                FROM kehadiran k JOIN students s ON s.id=k.ref_id
@@ -670,6 +684,7 @@ class Handler(BaseHTTPRequestHandler):
                  "Siswa Sakit/Izin"),
             stat("x", "merah", hitung[("siswa", "Alpa")], "Siswa Alpa"),
             stat("scan", "ungu", belum, "Siswa Belum Scan"),
+            stat("scan", "indigo", belum_guru, "Guru Belum Scan"),
             stat("badge", "indigo", hitung[("guru", "Hadir")] + hitung[("guru", "Terlambat")],
                  "Guru Hadir"),
         ])

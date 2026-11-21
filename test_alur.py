@@ -906,8 +906,9 @@ must(urllib.parse.urlparse(url).path == "/login",
 # ===========================================================================
 # Fase N — Dashboard: penghitung HARI INI. "Siswa Hadir" mencakup Hadir +
 # Terlambat (yang terlambat tetap dihitung hadir), "Guru Hadir" juga begitu,
-# dan "Siswa Belum Scan" = total siswa - siswa yang sudah punya catatan apa
-# pun hari ini (scan / manual Sakit-Izin / Alpa otomatis), turun 1 per scan.
+# dan "Siswa Belum Scan" turun 1 per scan / catatan manual. (Definisi
+# "Belum Scan" disempurnakan di Fase P: Alpa OTOMATIS tidak menguranginya;
+# semua pemeriksaan fase ini berjalan sebelum 09:00 sehingga tetap berlaku.)
 # Simulasi Rabu 2026-11-18: tanggal baru yang belum punya catatan sama
 # sekali, jadi angka awal pasti 0 / total siswa. Delta dihitung dari angka
 # awal yang dibaca dari dashboard sendiri agar tahan data fase sebelumnya.
@@ -1042,6 +1043,109 @@ s, url, scan_html = req(admin, "/scan-gerbang")
 must(scan_html.count("/static/app.js") == 1,
      "halaman Scan Gerbang memuat app.js tepat satu kali (dari layout)")
 must("jsQR" in scan_html, "halaman Scan Gerbang tetap memuat jsQR dari CDN")
+
+# ===========================================================================
+# Fase P — "Belum Scan" TIDAK dikurangi Alpa otomatis. Definisi:
+# Siswa Belum Scan = total siswa - siswa yang hari ini SUDAH scan (Hadir/
+# Terlambat) atau dicatat manual (Sakit/Izin/Alpa manual/dll). Siswa yang
+# hanya punya catatan Alpa otomatis (metode='auto') TIDAK mengurangi —
+# mereka tidak pernah scan, jadi tetap "belum scan" sepanjang hari, juga
+# sesudah 09:00 saat Alpa otomatis termaterialisasi. Kartu baru "Guru
+# Belum Scan" memakai prinsip yang sama terhadap total guru AKTIF.
+# Simulasi Kamis 2026-11-19 (tanggal segar, belum dipakai fase lain);
+# delta dibaca dari dashboard sendiri agar tahan data fase sebelumnya.
+# ===========================================================================
+TGL_P = "2026-11-19"
+
+start_server()  # waktu nyata: siapkan data khas fase ini lewat alur admin
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Belum"})
+s, url, form_siswa = req(admin, "/admin/siswa")
+kb_p = opt_val(form_siswa, "UJI-Kelas-Belum")
+must(kb_p, "kelas UJI-Kelas-Belum dibuat untuk uji Belum Scan")
+for i in range(1, 4):
+    req(admin, "/admin/siswa",
+        {"nama": f"Siswa Belum {i}", "kode": f"UJI-B0{i}", "class_id": kb_p})
+req(admin, "/admin/guru", {"nama": "Guru Belum Satu", "username": "gurubelum1",
+                           "password": "gurubelum123", "mapel": "UJI-BelumMapel"})
+s, url, daftar_siswa_p = req(admin, "/admin/siswa")
+b2_id = id_dari_daftar(daftar_siswa_p, "/admin/siswa", "UJI-B02")
+must(b2_id, "id siswa UJI-B02 terbaca untuk input Sakit manual")
+s, url, daftar_guru_p = req(admin, "/admin/guru")
+chunk_gb = next((c for c in daftar_guru_p.split("<li>") if "gurubelum1" in c), "")
+m_qr_p = re.search(r"kode QR: <code>(G\d+)</code>", chunk_gb)
+must(m_qr_p is not None, "kode QR Guru Belum Satu terbaca")
+gb1_qr = m_qr_p.group(1)
+total_siswa_p = dbq("SELECT COUNT(*) FROM students")
+total_guru_p = dbq("SELECT COUNT(*) FROM users WHERE role='guru' AND aktif=1")
+must(dbq("SELECT COUNT(*) FROM kehadiran WHERE tanggal=?", (TGL_P,)) == 0,
+     "tanggal uji Belum Scan 2026-11-19 belum punya catatan kehadiran apa pun")
+
+# --- Kamis 06:30, sebelum ada catatan apa pun hari itu ---
+start_server(f"{TGL_P}T06:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Guru Belum Scan") is not None,
+     "dashboard memuat kartu 'Guru Belum Scan'")
+sh_p0 = angka_kartu(dash, "Siswa Hadir")
+gh_p0 = angka_kartu(dash, "Guru Hadir")
+bs_p0 = angka_kartu(dash, "Siswa Belum Scan")
+gb_p0 = angka_kartu(dash, "Guru Belum Scan")
+must(bs_p0 == total_siswa_p,
+     f"dashboard 06:30 sebelum scan: Siswa Belum Scan = total siswa "
+     f"{total_siswa_p} (terbaca {bs_p0})")
+must(gb_p0 == total_guru_p,
+     f"dashboard 06:30 sebelum scan: Guru Belum Scan = total guru aktif "
+     f"{total_guru_p} (terbaca {gb_p0})")
+# scan siswa 1 tepat waktu -> Hadir
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-B01"})
+must("Siswa Belum 1" in hasil and "Hadir" in hasil,
+     "scan Siswa Belum 1 pukul 06:30 -> Hadir")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Belum Scan") == bs_p0 - 1,
+     "setelah 1 scan Hadir: Siswa Belum Scan turun 1")
+must(angka_kartu(dash, "Siswa Hadir") == sh_p0 + 1,
+     "setelah 1 scan Hadir: Siswa Hadir naik 1")
+# Sakit manual siswa 2: Belum Scan turun 1, Siswa Hadir tidak berubah
+s, url, hasil = req(admin, "/kehadiran/edit",
+                    {"tanggal": TGL_P, "tipe": "siswa", "id": b2_id,
+                     "status": "Sakit", "jam": ""})
+must("ditandai Sakit" in hasil, "input manual Sakit Siswa Belum 2 tersimpan")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Belum Scan") == bs_p0 - 2,
+     "Sakit manual: Siswa Belum Scan turun 1")
+must(angka_kartu(dash, "Siswa Hadir") == sh_p0 + 1,
+     "Sakit manual: Siswa Hadir tidak berubah")
+
+# --- Kamis 07:30: guru scan Terlambat ---
+start_server(f"{TGL_P}T07:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": gb1_qr})
+must("Guru Belum Satu" in hasil and "Terlambat" in hasil,
+     "scan Guru Belum Satu pukul 07:30 -> Terlambat")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Guru Belum Scan") == gb_p0 - 1,
+     "guru scan Terlambat: Guru Belum Scan turun 1")
+must(angka_kartu(dash, "Guru Hadir") == gh_p0 + 1,
+     "guru scan Terlambat: Guru Hadir naik 1")
+bs_pre = angka_kartu(dash, "Siswa Belum Scan")
+gb_pre = angka_kartu(dash, "Guru Belum Scan")
+must(bs_pre == bs_p0 - 2 and gb_pre == gb_p0 - 1,
+     "angka Belum Scan pra-09:00 tercatat sebagai pembanding regresi")
+
+# --- Kamis 09:30: Alpa otomatis termaterialisasi untuk semua sisanya ---
+start_server(f"{TGL_P}T09:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, dash = req(admin, "/dashboard")
+must(angka_kartu(dash, "Siswa Belum Scan") == bs_pre,
+     "sesudah 09:00: Siswa Belum Scan TIDAK berubah "
+     "(Alpa otomatis tidak menguranginya, tidak jatuh ke 0)")
+must(angka_kartu(dash, "Guru Belum Scan") == gb_pre,
+     "sesudah 09:00: Guru Belum Scan TIDAK berubah "
+     "(Alpa otomatis tidak menguranginya, tidak jatuh ke 0)")
+must(angka_kartu(dash, "Siswa Alpa") == total_siswa_p - 2,
+     "sesudah 09:00: kartu Siswa Alpa memuat Alpa otomatis untuk semua "
+     "siswa tanpa catatan scan/manual")
 
 stop_server()
 if os.path.exists(DBUJI):
