@@ -27,7 +27,12 @@ code { background: #eef1f8; padding: 1px 6px; border-radius: 6px; font-size: .88
 .bg-wallpaper { position: fixed; inset: 0; z-index: -2;
   background-size: cover; background-position: center; background-repeat: no-repeat; }
 .bg-wallpaper::after { content: ""; position: absolute; inset: 0;
-  background: rgba(246,248,252,.86); }
+  background: rgba(246,248,252, var(--wp-alpha, .86)); }
+/* Pilihan radio sebaris (mis. Kejelasan Wallpaper di Pengaturan Tampilan) */
+.pilihan-radio label { display: inline-flex; align-items: center; gap: 6px;
+  margin: 2px 16px 6px 0; font-weight: 500; cursor: pointer; }
+.pilihan-radio input[type="radio"] { display: inline-block; width: auto;
+  margin: 0; padding: 0; }
 
 /* ---------- Shell ---------- */
 .shell { display: flex; min-height: 100vh; }
