@@ -139,6 +139,11 @@ body.menu-kustom .logout-btn:hover { background: var(--menu-hover);
 .btn-block { width: 100%; justify-content: center; }
 button { font-family: inherit; }
 form.inline { display: inline; }
+/* Dropdown wali kelas sebaris pada tabel Kelola Kelas: ringkas di dalam
+   sel (menimpa aturan select umum yang lebar penuh untuk form biasa). */
+table.tabel td select.wali-pilih { display: inline-block; width: auto;
+  max-width: 230px; margin-top: 0; padding: 6px 8px; font-size: .92rem;
+  border-radius: 8px; }
 label { display: block; margin: 12px 0; font-size: .95rem; font-weight: 550; }
 input, select { display: block; width: 100%; padding: 11px 12px; margin-top: 5px;
   font-size: 1rem; font-family: inherit; color: var(--teks);
