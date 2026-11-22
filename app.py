@@ -1975,6 +1975,12 @@ TEMA = {
     "langit": "Biru Langit Peach",
     "lilac": "Lilac Pink",
     "krem": "Krem Coral",
+    "lemon": "Pastel Lemon Mint",
+    "melon": "Peach Melon",
+    "senja": "Langit Senja",
+    "matcha": "Matcha Susu",
+    "rose": "Rose Berry",
+    "karamel": "Karamel Susu",
 }
 TEMA_GRAD = {
     "pastel-pink": ("#f472a0", "#fb923c"),
@@ -1982,6 +1988,12 @@ TEMA_GRAD = {
     "langit": ("#60a5fa", "#fdba74"),
     "lilac": ("#a78bfa", "#f472b6"),
     "krem": ("#fbbf24", "#fb7185"),
+    "lemon": ("#fde047", "#34d399"),
+    "melon": ("#fdba74", "#6ee7b7"),
+    "senja": ("#38bdf8", "#fb923c"),
+    "matcha": ("#a3e635", "#4ade80"),
+    "rose": ("#fb7185", "#c084fc"),
+    "karamel": ("#f2a950", "#d97706"),
 }
 
 
@@ -2149,12 +2161,16 @@ def _cari(self, user, qs, flash):
         items = ""
         for i, r in enumerate(siswa_rows):
             if admin:
-                tautan = (f'<a href="/siswa/{r["id"]}">Detail</a> '
-                          f'&mdash; <a href="/admin/kelas/{r["class_id"]}">Lihat Kelas</a>'
-                          f' &mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a>')
+                tautan = (f'<span class="aksi-grup">'
+                          f'<a class="btn-aksi" href="/siswa/{r["id"]}">Detail</a>'
+                          f'<a class="btn-aksi" href="/admin/kelas/{r["class_id"]}">Lihat Kelas</a>'
+                          f'<a class="btn-aksi" href="/admin/siswa/{r["id"]}/edit">Edit</a>'
+                          f'</span>')
             else:
-                tautan = (f'<a href="/siswa/{r["id"]}">Detail</a> '
-                          f'&mdash; <a href="/tabel-siswa?kelas={r["class_id"]}">Lihat Kelas</a>')
+                tautan = (f'<span class="aksi-grup">'
+                          f'<a class="btn-aksi" href="/siswa/{r["id"]}">Detail</a>'
+                          f'<a class="btn-aksi" href="/tabel-siswa?kelas={r["class_id"]}">Lihat Kelas</a>'
+                          f'</span>')
             items += (f'<tr><td class="no">{i + 1}</td>'
                       f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
                       f'<td><code>{esc(r["kode"])}</code></td>'
@@ -2167,8 +2183,9 @@ def _cari(self, user, qs, flash):
     if guru_rows:
         items = ""
         for i, r in enumerate(guru_rows):
-            tautan = (f'<a href="/admin/guru/{r["id"]}/edit">Edit</a>'
-                      if admin else "")
+            tautan = (f'<span class="aksi-grup">'
+                      f'<a class="btn-aksi" href="/admin/guru/{r["id"]}/edit">Edit</a>'
+                      f'</span>' if admin else "")
             items += (f'<tr><td class="no">{i + 1}</td>'
                       f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
                       f'<td>{esc(r["mapel"] or "—")}</td>'
@@ -2291,7 +2308,7 @@ def _siswa_detail(self, user, sid, flash):
                         '<p class="muted">Belum ada catatan kehadiran pada '
                         '6 bulan terakhir.</p></div>')
     total_sel = "".join(f"<td>{total[s]}</td>" for s in status_list)
-    edit = (f' &mdash; <a href="/admin/siswa/{st["id"]}/edit">Edit</a>'
+    edit = (f' <a class="btn-aksi" href="/admin/siswa/{st["id"]}/edit">Edit</a>'
             if user["role"] == "admin" else "")
     if user["role"] == "guru":
         kembali = '<p><a href="/tabel-siswa">Kembali ke tabel siswa</a></p>'
@@ -2506,11 +2523,12 @@ def _admin_guru(self, user, flash):
                  f'<td>{esc(r["mapel"] or "-")}</td>'
                  f'{sel_user}'
                  f'<td><code>{esc(r["kode_qr"] or "-")}</code></td>'
-                 f'<td class="aksi"><a href="/admin/guru/{r["id"]}/edit">Edit</a> ')
+                 f'<td class="aksi"><span class="aksi-grup">'
+                 f'<a class="btn-aksi" href="/admin/guru/{r["id"]}/edit">Edit</a>')
         if not r["aktif"]:
             items += (dasar + '(nonaktif) '
                       f'<form method="post" action="/admin/guru/{r["id"]}/aktifkan" class="inline">'
-                      f'<button type="submit" class="btn btn-ghost btn-sm">Aktifkan</button></form></td></tr>')
+                      f'<button type="submit" class="btn btn-ghost btn-sm">Aktifkan</button></form></span></td></tr>')
         elif r["jml_riwayat"]:
             confirm_msg = (f"Nonaktifkan guru {nama_js}? Guru ini sudah punya riwayat kehadiran, "
                            f"jadi akunnya akan dinonaktifkan (bukan dihapus) dan riwayat "
@@ -2518,13 +2536,13 @@ def _admin_guru(self, user, flash):
             items += (dasar +
                       f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
                       f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+                      f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
         else:
             confirm_msg = f"Hapus guru {nama_js}? Akun guru ini akan dihapus permanen."
             items += (dasar +
                       f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
                       f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-                      f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+                      f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
     items = items or '<tr><td colspan="6" class="muted">Belum ada guru.</td></tr>'
     body = f"""<h2>Kelola Guru</h2>
     <div class="card table-card"><div class="table-scroll">
@@ -2692,10 +2710,11 @@ def _simple_list(self, user, flash, table, title, action, label, aktif_key):
         confirm_msg = f"Hapus {label.lower()} {js_str(r['nama'])}?"
         items += (
             f'<li><b>{esc(r["nama"])}</b> '
-            f'&mdash; <a href="{action}/{r["id"]}/edit">Edit</a> '
+            f'<span class="aksi-grup">'
+            f'<a class="btn-aksi" href="{action}/{r["id"]}/edit">Edit</a>'
             f'<form method="post" action="{action}/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></li>')
+            f'<button type="submit" class="btn-aksi">Hapus</button></form></span></li>')
     items = items or '<li class="muted">Belum ada data.</li>'
     body = f"""<h2>{esc(title)}</h2>
     <div class="card"><ul class="plain-list">{items}</ul></div>
@@ -2854,10 +2873,11 @@ def _admin_kelas(self, user, flash):
             f'<td class="nama"><b><a href="/admin/kelas/{r["id"]}">{esc(r["nama"])}</a></b></td>'
             f'<td class="jml">{r["jml"]}</td>'
             f'<td>{sel_wali}</td>'
-            f'<td class="aksi"><a href="/admin/kelas/{r["id"]}/edit">Edit</a> '
+            f'<td class="aksi"><span class="aksi-grup">'
+            f'<a class="btn-aksi" href="/admin/kelas/{r["id"]}/edit">Edit</a>'
             f'<form method="post" action="/admin/kelas/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+            f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
     items = items or '<tr><td colspan="5" class="muted">Belum ada data.</td></tr>'
     body = f"""<h2>Kelola Kelas</h2>
     <div class="card table-card"><div class="table-scroll">
@@ -3059,10 +3079,11 @@ def _admin_kelas_detail(self, user, kid, flash):
             f'<tr><td class="no">{i + 1}</td>'
             f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
             f'<td><code>{esc(r["kode"])}</code></td>'
-            f'<td class="aksi"><a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
+            f'<td class="aksi"><span class="aksi-grup">'
+            f'<a class="btn-aksi" href="/admin/siswa/{r["id"]}/edit">Edit</a>'
             f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+            f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
     if items:
         daftar = ('<div class="card table-card"><div class="table-scroll">'
                   '<table class="tabel kelola"><thead><tr><th class="no">No</th>'
@@ -3104,11 +3125,12 @@ def _admin_siswa(self, user, qs, flash):
             f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
             f'<td><code>{esc(r["kode"])}</code></td>'
             f'<td>{esc(r["kelas"])}</td>'
-            f'<td class="aksi"><a href="/siswa/{r["id"]}">Detail</a> '
-            f'&mdash; <a href="/admin/siswa/{r["id"]}/edit">Edit</a> '
+            f'<td class="aksi"><span class="aksi-grup">'
+            f'<a class="btn-aksi" href="/siswa/{r["id"]}">Detail</a>'
+            f'<a class="btn-aksi" href="/admin/siswa/{r["id"]}/edit">Edit</a>'
             f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
-            f'<button type="submit" class="btn btn-danger btn-sm">Hapus</button></form></td></tr>')
+            f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
     items = items or '<tr><td colspan="5" class="muted">Belum ada siswa.</td></tr>'
     body = f"""<h2>Kelola Siswa</h2>
     <div class="card table-card"><div class="table-scroll">
@@ -3216,7 +3238,7 @@ def _admin_tampilan(self, user, flash):
         cek_j = " checked" if jelas_ini == nilai_j else ""
         radio_jelas += (f'<label><input type="radio" name="kejelasan_wp" '
                         f'value="{nilai_j}"{cek_j}> {label_j}</label>')
-    # Tema: enam pilihan (Default + 5 tema pastel), masing-masing dengan
+    # Tema: dua belas pilihan (Default + 11 tema pastel), masing-masing dengan
     # chip pratinjau gradasi warnanya; yang tercentang = tema yang
     # sedang berlaku ('' = Default).
     tema_ini = peng["tema"]
