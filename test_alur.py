@@ -532,6 +532,8 @@ rata = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not No
 must("ABSENSI GURU" in rata and "Guru Uji" in rata and "Mapel" in rata,
      "Excel guru memuat judul, nama guru, dan kolom Mapel")
 
+from PIL import Image as PILImage
+
 # ===========================================================================
 # Fase G — Pengaturan Tampilan: warna, nama sekolah, wallpaper
 # ===========================================================================
@@ -580,11 +582,14 @@ s, url, hasil = unggah(admin, "/admin/tampilan/wallpaper", "wallpaper",
                        "wallpaper.png", PNG_1PX)
 must("Wallpaper dipasang." in hasil, "unggah wallpaper PNG berhasil")
 s, url, hal_tampilan = req(admin, "/admin/tampilan")
-m_wp = re.search(r"/wallpaper/([0-9a-f]{24}\.png)", hal_tampilan)
+# Sejak Fase AJ wallpaper unggahan selalu dikompres menjadi JPEG.
+m_wp = re.search(r"/wallpaper/([0-9a-f]{24}\.jpg)", hal_tampilan)
 must(m_wp is not None, "halaman tampilan menampilkan wallpaper tersimpan")
 nama_wp = m_wp.group(1)
 st, hdr, data = req_bytes(anon, f"/wallpaper/{nama_wp}")
-must(st == 200 and hdr.get_content_type() == "image/png" and data == PNG_1PX,
+_img_wp = PILImage.open(io.BytesIO(data))
+must(st == 200 and hdr.get_content_type() == "image/jpeg"
+     and _img_wp.format == "JPEG",
      "route /wallpaper/<nama> menyajikan berkas gambar (juga untuk halaman login)")
 s, url, dash = req(admin, "/dashboard")
 must(f"/wallpaper/{nama_wp}" in dash, "dashboard mereferensikan wallpaper sebagai latar")
@@ -613,7 +618,9 @@ m_logo = re.search(r"/logo/([0-9a-f]{24}\.png)", hal_tampilan)
 must(m_logo is not None, "halaman tampilan menampilkan logo tersimpan")
 nama_logo = m_logo.group(1)
 st, hdr, data = req_bytes(anon, f"/logo/{nama_logo}")
-must(st == 200 and hdr.get_content_type() == "image/png" and data == PNG_1PX,
+_img_logo = PILImage.open(io.BytesIO(data))
+must(st == 200 and hdr.get_content_type() == "image/png"
+     and _img_logo.format == "PNG" and _img_logo.mode == "RGBA",
      "route /logo/<nama> menyajikan berkas logo (juga untuk halaman login)")
 s, url, dash = req(admin, "/dashboard")
 must(f"/logo/{nama_logo}" in dash and "has-logo" in dash,
@@ -746,7 +753,7 @@ s, url, daftar_kelas = req(admin2, "/admin/kelas")
 must("UJI-Kelas-Backup" in daftar_kelas,
      "setelah pulih: kelas dari backup kembali tampil di daftar")
 s, url, hal_tampilan = req(admin2, "/admin/tampilan")
-must(re.search(r"/wallpaper/[0-9a-f]{24}\.png", hal_tampilan) is not None,
+must(re.search(r"/wallpaper/[0-9a-f]{24}\.jpg", hal_tampilan) is not None,
      "setelah pulih: wallpaper dari backup ikut kembali terpasang")
 # berkas yang salah ditolak & data tidak berubah
 s, url, hasil = unggah(admin2, "/admin/backup/pulihkan", "berkas",
@@ -2029,7 +2036,7 @@ s, url, hasil = unggah(admin, "/admin/tampilan/wallpaper", "wallpaper",
                        "wallpaper.png", PNG_1PX)
 must("Wallpaper dipasang." in hasil, "unggah wallpaper untuk Fase Y berhasil")
 s, url, hal_tampilan = req(admin, "/admin/tampilan")
-m_wp_y = re.search(r"/wallpaper/([0-9a-f]{24}\.png)", hal_tampilan)
+m_wp_y = re.search(r"/wallpaper/([0-9a-f]{24}\.jpg)", hal_tampilan)
 must(m_wp_y is not None, "halaman tampilan menampilkan wallpaper Fase Y")
 nama_wp_y = m_wp_y.group(1)
 s, url, login_page = req(anon, "/login")
@@ -3409,6 +3416,93 @@ s, url, hal = req(wali_ai2, "/login-wali",
                   {"kelas_id": str(kkp_id), "password": pw_ai})
 must("dashboard" in url,
      "AI: regresi: wali tetap bisa login lewat /login-wali (pilih kelas)")
+
+# ===========================================================================
+# Fase AJ — KOMPRESI GAMBAR UNGGAHAN + CACHE (perbaikan permanen latar
+# lama muncul). Dua penyebab yang diverifikasi di layanan live: berkas
+# wallpaper 3,1 MB (foto resolusi penuh) dan route penyajian gambar tanpa
+# Cache-Control sehingga browser mengunduh ulang di setiap halaman.
+# Kini: unggah wallpaper otomatis dikecilkan jadi JPEG <=1920 px; logo
+# PNG ber-alpha tetap PNG <=512 px; /wallpaper/<nama> & /logo/<nama>
+# mengirim "Cache-Control: public, max-age=604800, immutable" (nama
+# berkas token acak berganti tiap unggahan, jadi aman di-cache lama).
+# ===========================================================================
+import random
+
+start_server()  # DB scratch utama (DBUJI)
+admin, url, _ = login("admin", "admin123")
+anon = client()
+
+# --- gambar uji besar: foto-noise 3000x2000 JPEG (±4 MB, di bawah batas) ---
+random.seed(20261122)
+_img_besar = PILImage.frombytes("RGB", (3000, 2000),
+                                random.randbytes(3000 * 2000 * 3))
+_buf = io.BytesIO()
+_img_besar.save(_buf, "JPEG", quality=80)
+data_foto_besar = _buf.getvalue()
+must(len(data_foto_besar) > 1024 * 1024,
+     f"AJ: gambar uji foto besar terbentuk ({len(data_foto_besar)} byte > 1 MB)")
+
+# --- (1) unggah wallpaper besar -> tersimpan sebagai JPEG kecil <=1920 ---
+s, url, hasil = unggah(admin, "/admin/tampilan/wallpaper", "wallpaper",
+                       "foto-besar.jpg", data_foto_besar, "image/jpeg")
+must("Wallpaper dipasang." in hasil, "AJ: unggah wallpaper besar berhasil")
+nama_wp_aj = dbq("SELECT value FROM settings WHERE key='wallpaper'")
+must(nama_wp_aj is not None
+     and re.fullmatch(r"[0-9a-f]{24}\.(jpg|jpeg|png|webp)", nama_wp_aj)
+     and nama_wp_aj.endswith(".jpg"),
+     f"AJ: settings wallpaper = nama token .jpg yang lolos pola nama berkas: {nama_wp_aj}")
+path_wp_aj = os.path.join(UPLOAD_DIR, nama_wp_aj)
+must(os.path.isfile(path_wp_aj), "AJ: berkas wallpaper tersimpan ada di uploads/")
+_img_wp_aj = PILImage.open(path_wp_aj)
+_img_wp_aj.load()
+must(_img_wp_aj.format == "JPEG"
+     and _img_wp_aj.size[0] <= 1920 and _img_wp_aj.size[1] <= 1920,
+     f"AJ: wallpaper tersimpan JPEG {_img_wp_aj.size} (kedua sisi <= 1920 px)")
+ukuran_wp_aj = os.path.getsize(path_wp_aj)
+must(ukuran_wp_aj * 2 < len(data_foto_besar),
+     f"AJ: ukuran wallpaper menyusut drastis: {len(data_foto_besar)} -> "
+     f"{ukuran_wp_aj} byte (kurang dari separuh unggahan)")
+
+# --- (2) route wallpaper: konten benar + header Cache-Control ---
+st, hdr, data = req_bytes(anon, f"/wallpaper/{nama_wp_aj}")
+must(st == 200 and hdr.get_content_type() == "image/jpeg",
+     "AJ: GET /wallpaper/<nama> -> 200 image/jpeg")
+cc_wp = hdr.get("Cache-Control") or ""
+must("max-age=604800" in cc_wp and "immutable" in cc_wp,
+     f"AJ: /wallpaper mengirim Cache-Control immutable: {cc_wp}")
+s, url, dash = req(admin, "/dashboard")
+must(f"/wallpaper/{nama_wp_aj}" in dash,
+     "AJ: dashboard mereferensikan wallpaper hasil kompresi sebagai latar")
+
+# --- (3) logo PNG ber-alpha 800x600 -> tetap PNG ber-alpha, <=512 px ---
+_img_logo_aj = PILImage.new("RGBA", (800, 600), (30, 120, 200, 128))
+_buf = io.BytesIO()
+_img_logo_aj.save(_buf, "PNG")
+data_logo_aj = _buf.getvalue()
+s, url, hasil = unggah(admin, "/admin/tampilan/logo", "logo",
+                       "logo-alpha.png", data_logo_aj)
+must("Logo dipasang." in hasil, "AJ: unggah logo PNG ber-alpha berhasil")
+nama_logo_aj = dbq("SELECT value FROM settings WHERE key='logo'")
+must(nama_logo_aj is not None and nama_logo_aj.endswith(".png"),
+     f"AJ: settings logo tetap bernama .png: {nama_logo_aj}")
+_img_logo_tersimpan = PILImage.open(os.path.join(UPLOAD_DIR, nama_logo_aj))
+_img_logo_tersimpan.load()
+must(_img_logo_tersimpan.format == "PNG"
+     and _img_logo_tersimpan.mode == "RGBA"
+     and _img_logo_tersimpan.size[0] <= 512
+     and _img_logo_tersimpan.size[1] <= 512,
+     f"AJ: logo tersimpan PNG ber-alpha {_img_logo_tersimpan.size} (<= 512 px)")
+st, hdr, data = req_bytes(anon, f"/logo/{nama_logo_aj}")
+cc_logo = hdr.get("Cache-Control") or ""
+must(st == 200 and "max-age=604800" in cc_logo,
+     f"AJ: /logo ikut mengirim Cache-Control immutable: {cc_logo}")
+
+# --- bersihkan lagi agar keadaan akhir netral ---
+s, url, hasil = req(admin, "/admin/tampilan/wallpaper/hapus", {})
+must("Wallpaper dihapus." in hasil, "AJ: wallpaper uji dibersihkan")
+s, url, hasil = req(admin, "/admin/tampilan/logo/hapus", {})
+must("Logo dihapus." in hasil, "AJ: logo uji dibersihkan")
 
 stop_server()
 if os.path.exists(DBUJI):

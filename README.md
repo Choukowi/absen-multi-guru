@@ -183,6 +183,16 @@ Hanya **wali kelas** yang bisa login sebagai guru. Modelnya:
 Wallpaper tersimpan sebagai berkas di `data/uploads/` (nama acak) dan
 disajikan hanya lewat route `/wallpaper/<nama>`.
 
+**Kompresi & cache gambar unggahan**: gambar yang diunggah admin
+(wallpaper & logo) otomatis dikecilkan saat diunggah — wallpaper menjadi
+JPEG dengan sisi terpanjang maks 1920 px, logo maks 512 px (PNG
+bertransparansi tetap PNG) — sehingga foto resolusi penuh tidak lagi
+membebani loading halaman. Route `/wallpaper/<nama>` dan `/logo/<nama>`
+juga mengirim header `Cache-Control: public, max-age=604800, immutable`
+(nama berkas adalah token acak yang berganti setiap unggahan), jadi
+browser cukup mengunduh gambar sekali, bukan di setiap halaman. Bila
+pengolahan gambar gagal, berkas asli tetap disimpan apa adanya.
+
 ### Migrasi dari versi lama (sesi per mapel)
 
 Aman untuk database versi lama: saat start, aplikasi hanya menjalankan

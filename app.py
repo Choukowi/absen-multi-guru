@@ -552,12 +552,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def send_bytes(self, data, ctype, filename=None):
+    def send_bytes(self, data, ctype, filename=None, extra_headers=None):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(data)))
+        for k, v in (extra_headers or []):
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
@@ -3372,6 +3374,55 @@ def _post_admin_tampilan_tema(self, f):
     return self.redirect("/admin/tampilan", "Tema disimpan.")
 
 
+# Header cache untuk berkas gambar unggahan (wallpaper & logo): nama berkas
+# adalah token hex acak yang BERGANTI setiap unggahan, jadi isinya tidak akan
+# pernah berubah di URL yang sama — aman di-cache browser lama & immutable.
+# Tanpa ini browser mengunduh ulang gambar yang sama di setiap halaman
+# (penyebab latar lama muncul: berkas wallpaper bisa berukuran MB-an).
+CACHE_GAMBAR_UPLOADS = "public, max-age=604800, immutable"
+
+
+def _kompres_gambar_unggahan(data, ext_asli, jenis):
+    """Kecilkan gambar unggahan (wallpaper/logo) dengan Pillow.
+
+    Kembalikan (bytes_hasil, ext_hasil). Wallpaper selalu menjadi JPEG RGB
+    (tidak butuh transparansi) dengan sisi terpanjang <= 1920 px, kualitas
+    82 — foto 3 MB-an menyusut jadi ratusan KB. Logo dibatasi 512 px: PNG
+    (atau gambar ber-alpha) dipertahankan sebagai PNG agar transparansi
+    tidak hilang, JPEG tetap JPEG kualitas 85, WebP tetap WebP.
+
+    Kegagalan Pillow dalam bentuk apa pun TIDAK boleh menggagalkan
+    unggahan: kembalikan bytes & ekstensi asli apa adanya.
+    """
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
+        img.load()
+        buf = io.BytesIO()
+        if jenis == "wallpaper":
+            img = img.convert("RGB")
+            img.thumbnail((1920, 1920))
+            img.save(buf, "JPEG", quality=82, optimize=True)
+            return buf.getvalue(), ".jpg"
+        punya_alpha = img.mode in ("RGBA", "LA") or (
+            img.mode == "P" and "transparency" in img.info)
+        fmt = (img.format or "").upper()
+        img.thumbnail((512, 512))
+        if punya_alpha or fmt == "PNG":
+            img.save(buf, "PNG", optimize=True)
+            return buf.getvalue(), ".png"
+        if fmt == "JPEG":
+            img.convert("RGB").save(buf, "JPEG", quality=85, optimize=True)
+            return buf.getvalue(), ".jpg"
+        if fmt == "WEBP":
+            img.convert("RGB").save(buf, "WEBP", quality=90)
+            return buf.getvalue(), ".webp"
+        img.save(buf, "PNG", optimize=True)
+        return buf.getvalue(), ".png"
+    except Exception:
+        return data, ext_asli
+
+
 def _post_admin_tampilan_wallpaper(self):
     length = int(self.headers.get("Content-Length", "0") or "0")
     if length > 6 * 1024 * 1024:
@@ -3388,6 +3439,7 @@ def _post_admin_tampilan_wallpaper(self):
                              "Format tidak didukung. Pakai JPG, PNG, atau WebP.")
     if len(data) > 5 * 1024 * 1024:
         return self.redirect("/admin/tampilan", "Berkas terlalu besar (maks \u00b15 MB).")
+    data, ext = _kompres_gambar_unggahan(data, ext, "wallpaper")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     lama = get_pengaturan()["wallpaper"]
     nama_baru = secrets.token_hex(12) + ext
@@ -3426,7 +3478,9 @@ def _wallpaper_file(self, nama):
     ext = os.path.splitext(nama)[1].lower()
     with open(path, "rb") as fh:
         data = fh.read()
-    return self.send_bytes(data, WALLPAPER_EXT.get(ext, "application/octet-stream"))
+    return self.send_bytes(
+        data, WALLPAPER_EXT.get(ext, "application/octet-stream"),
+        extra_headers=[("Cache-Control", CACHE_GAMBAR_UPLOADS)])
 
 
 def _post_admin_tampilan_logo(self):
@@ -3445,6 +3499,7 @@ def _post_admin_tampilan_logo(self):
                              "Format tidak didukung. Pakai JPG, PNG, atau WebP.")
     if len(data) > 5 * 1024 * 1024:
         return self.redirect("/admin/tampilan", "Berkas terlalu besar (maks \u00b15 MB).")
+    data, ext = _kompres_gambar_unggahan(data, ext, "logo")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     lama = get_pengaturan()["logo"]
     nama_baru = secrets.token_hex(12) + ext
