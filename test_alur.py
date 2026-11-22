@@ -249,8 +249,8 @@ must(dbqf(DBMIG, "SELECT password_hash FROM users WHERE username='gurumigrasi'")
 # Admin menunjuknya jadi wali MIG-Kelas-1 -> kredensial baru terbit.
 mk1 = id_dari_daftar(daftar_kelas_m, "/admin/kelas", "MIG-Kelas-1")
 must(mk1, "MIGRASI: id MIG-Kelas-1 terbaca dari daftar kelas")
-s, url, hasil_m = req(admin_m, f"/admin/kelas/{mk1}/edit",
-                      {"nama": "MIG-Kelas-1", "wali_id": "2"})
+s, url, hasil_m = req(admin_m, f"/admin/kelas/{mk1}/wali",
+                      {"wali_id": "2"})
 m_wm = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil_m)
 must(m_wm is not None and m_wm.group(1) == "walimigkelas1",
      "MIGRASI: penunjukan wali menerbitkan username walimigkelas1 + password acak")
@@ -419,12 +419,13 @@ must(dbq("SELECT status FROM kehadiran WHERE tanggal='2026-11-16' "
          "AND ref_type='siswa' AND ref_id=?", (C_id,)) == "Sakit",
      "status C tetap Sakit setelah scan")
 # --- model login hanya wali kelas: Guru Uji ditunjuk admin sebagai
-# wali UJI-Kelas-1 lewat Edit Kelas (memilih dari daftar guru yang ada).
-# Sistem menerbitkan username waliujikelas1 + password ACAK yang tampil
-# SATU kali di pesan flash; kredensial itulah yang dipakai fase-fase
-# berikutnya setiap kali "guru" login.
-s, url, hasil = req(admin, f"/admin/kelas/{k1}/edit",
-                    {"nama": "UJI-Kelas-1", "wali_id": str(g1_id)})
+# wali UJI-Kelas-1 lewat dropdown pada kolom Wali Kelas di Kelola Kelas
+# (memilih dari daftar guru yang ada). Sistem menerbitkan username
+# waliujikelas1 + password ACAK yang tampil SATU kali di pesan flash;
+# kredensial itulah yang dipakai fase-fase berikutnya setiap kali
+# "guru" login.
+s, url, hasil = req(admin, f"/admin/kelas/{k1}/wali",
+                    {"wali_id": str(g1_id)})
 m_wali = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
 must(m_wali is not None,
      "penunjukan wali: flash memuat username wali + password sementara acak")
@@ -2503,18 +2504,27 @@ chunk_kw = next((c for c in daftar_kelas_ad.split("<tr>") if "UJI-Kelas-Wali" in
 must("Belum ada" in chunk_kw,
      "AD: kelas baru tampil '— Belum ada' di kolom Wali Kelas")
 
-# --- pemilih wali pada form Edit Kelas: guru yang ada, format Nama — Mapel ---
+# --- form Edit Kelas TIDAK lagi memuat pemilih wali: penugasan pindah
+# ke dropdown sebaris pada kolom Wali Kelas di tabel Kelola Kelas ---
 s, url, form_edit_kw = req(admin, f"/admin/kelas/{kw_id}/edit")
-must('name="wali_id"' in form_edit_kw,
-     "AD: form Edit Kelas punya pemilih Wali Kelas")
+must('name="wali_id"' not in form_edit_kw,
+     "AD: form Edit Kelas TANPA pemilih Wali Kelas (pindah ke kolom tabel)")
+must('name="nama"' in form_edit_kw,
+     "AD: form Edit Kelas tetap punya kolom nama kelas")
+must(f'action="/admin/kelas/{kw_id}/wali"' in chunk_kw
+     and '<select name="wali_id"' in chunk_kw
+     and 'onchange="this.form.submit()"' in chunk_kw,
+     "AD: kolom Wali Kelas = form dropdown sebaris (terkirim saat diganti)")
 for nm in ("Guru Wali Satu", "Guru Wali Dua", "Guru Bebas"):
-    must(nm in form_edit_kw, f"AD: pemilih wali memuat guru yang ada: {nm}")
-must("UJI-WaliMapel" in form_edit_kw,
+    must(nm in chunk_kw, f"AD: dropdown wali memuat guru yang ada: {nm}")
+must("UJI-WaliMapel" in chunk_kw,
      "AD: pilihan wali tampil dalam format 'Nama — Mapel'")
+must('<option value="" selected>' in chunk_kw,
+     "AD: kelas tanpa wali: pilihan '— Belum ada —' (value='') terpilih")
 
 # --- penunjukan: kredensial otomatis terbit lewat flash satu kali ---
-s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/edit",
-                    {"nama": "UJI-Kelas-Wali", "wali_id": str(gw1)})
+s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/wali",
+                    {"wali_id": str(gw1)})
 m_ad = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
 must(m_ad is not None and m_ad.group(1) == "waliujikelaswali",
      "AD: penunjukan menerbitkan username waliujikelaswali + password acak")
@@ -2619,11 +2629,13 @@ s, url, form_edit_w = req(wali, f"/kehadiran/edit?tanggal=2026-11-26&tipe=siswa&
 must("Data tidak ditemukan." in form_edit_w,
      "AD: form edit siswa kelas lain juga tertutup untuk wali")
 
-# --- edit kelas TANPA mengganti wali: password TIDAK berubah ---
+# --- edit kelas TIDAK menyentuh penugasan wali sama sekali ---
 s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/edit",
-                    {"nama": "UJI-Kelas-Wali", "wali_id": str(gw1)})
+                    {"nama": "UJI-Kelas-Wali"})
 must("password sementara" not in hasil,
-     "AD: edit kelas tanpa mengganti wali: tidak ada password baru diterbitkan")
+     "AD: edit kelas (nama saja): tidak ada password baru diterbitkan")
+must(dbq("SELECT wali_id FROM classes WHERE id=?", (kw_id,)) == gw1,
+     "AD: edit kelas tidak mengubah penugasan wali (tetap Guru Wali Satu)")
 wali2, url, _ = login("waliujikelaswali", pw_ad1)
 must("dashboard" in url,
      "AD: password lama wali tetap berlaku sesudah edit tanpa ganti wali")
@@ -2642,15 +2654,17 @@ wali3, url, _ = login("waliujikelaswali", pw_ad2)
 must("dashboard" in url, "AD: password baru dari tombol admin bisa dipakai login")
 
 # --- eksklusi: wali suatu kelas tidak ditawarkan ke kelas lain ---
-s, url, form_edit_ks = req(admin, f"/admin/kelas/{ks_id}/edit")
-must("Guru Wali Satu" not in form_edit_ks,
-     "AD: guru yang sudah wali kelas lain TIDAK ditawarkan di kelas lain")
-must("Guru Wali Dua" in form_edit_ks and "Guru Bebas" in form_edit_ks,
-     "AD: guru yang bebas tetap ditawarkan di kelas lain")
+s, url, daftar_kelas_ks = req(admin, "/admin/kelas")
+chunk_ks = next((c for c in daftar_kelas_ks.split("<tr>")
+                 if "UJI-Kelas-Samping" in c), "")
+must("Guru Wali Satu" not in chunk_ks,
+     "AD: guru yang sudah wali kelas lain TIDAK ditawarkan di dropdown kelas lain")
+must("Guru Wali Dua" in chunk_ks and "Guru Bebas" in chunk_ks,
+     "AD: guru yang bebas tetap ditawarkan di dropdown kelas lain")
 
 # --- penggantian wali: login lama mati, login baru jalan ---
-s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/edit",
-                    {"nama": "UJI-Kelas-Wali", "wali_id": str(gw2)})
+s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/wali",
+                    {"wali_id": str(gw2)})
 m_rp = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
 must(m_rp is not None and "Guru Wali Dua" in hasil,
      "AD: penggantian wali menerbitkan kredensial untuk wali baru")
@@ -2666,9 +2680,9 @@ wali4, url, _ = login("waliujikelaswali", pw_ad3)
 must("dashboard" in url, "AD: wali BARU bisa login dengan kredensial barunya")
 
 # --- pencabutan wali: login mati ---
-# (form asli mengirim sentinel "0" untuk pilihan "— Belum ada —")
-s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/edit",
-                    {"nama": "UJI-Kelas-Wali", "wali_id": "0"})
+# (dropdown sebaris mengirim wali_id="" untuk pilihan "— Belum ada —")
+s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/wali",
+                    {"wali_id": ""})
 must("Wali kelas UJI-Kelas-Wali dicabut" in hasil,
      "AD: pencabutan wali dikonfirmasi lewat pesan flash")
 must(dbq("SELECT wali_id FROM classes WHERE id=?", (kw_id,)) is None,
@@ -2677,8 +2691,8 @@ g_old3, url, body = login("waliujikelaswali", pw_ad3)
 must("dashboard" not in url, "AD: login wali mati sesudah penugasan dicabut")
 
 # --- sesi terputus di tengah jalan begitu penugasan dicabut ---
-s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/edit",
-                    {"nama": "UJI-Kelas-Wali", "wali_id": str(gb)})
+s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/wali",
+                    {"wali_id": str(gb)})
 m_ms = re.search(r"password sementara: (\S+)", hasil)
 must(m_ms is not None, "AD: penunjukan Guru Bebas menerbitkan password")
 pw_ad4 = m_ms.group(1)
@@ -2686,8 +2700,8 @@ wali5, url, _ = login("waliujikelaswali", pw_ad4)
 must("dashboard" in url, "AD: Guru Bebas bisa login sesudah ditunjuk wali")
 s, url, dash5 = req(wali5, "/dashboard")
 must("Dashboard" in dash5, "AD: sesi wali aktif bisa membuka dashboard")
-s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/edit",
-                    {"nama": "UJI-Kelas-Wali", "wali_id": "0"})
+s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/wali",
+                    {"wali_id": ""})
 s, url, hal5 = req(wali5, "/dashboard")
 must(urllib.parse.urlparse(url).path == "/login",
      "AD: sesi wali yang dicabut di tengah jalan -> permintaan berikutnya "
@@ -2713,8 +2727,8 @@ must(not any(".lisensi" in ln and "tema-" in ln
      "CSS: tidak ada aturan tema pastel yang menimpa .lisensi")
 
 # --- Backup & Pulihkan mempertahankan penugasan wali ---
-s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/edit",
-                    {"nama": "UJI-Kelas-Wali", "wali_id": str(gw1)})
+s, url, hasil = req(admin, f"/admin/kelas/{kw_id}/wali",
+                    {"wali_id": str(gw1)})
 m_bk = re.search(r"password sementara: (\S+)", hasil)
 must(m_bk is not None, "AD: penunjukan ulang Guru Wali Satu menerbitkan password")
 pw_ad5 = m_bk.group(1)
@@ -2774,8 +2788,8 @@ req(admin, "/admin/guru", {"nama": "Guru Pilih Satu", "mapel": "UJI-PilihMapel"}
 s, url, daftar_guru_ae = req(admin, "/admin/guru")
 gp_id = id_dari_daftar(daftar_guru_ae, "/admin/guru", "<b>Guru Pilih Satu</b>")
 must(gp_id, "AE: id Guru Pilih Satu terbaca")
-s, url, hasil = req(admin, f"/admin/kelas/{kp_id}/edit",
-                    {"nama": "UJI-Kelas-Pilih", "wali_id": str(gp_id)})
+s, url, hasil = req(admin, f"/admin/kelas/{kp_id}/wali",
+                    {"wali_id": str(gp_id)})
 m_ae = re.search(r"password sementara: (\S+)", hasil)
 must(m_ae is not None, "AE: penunjukan wali menerbitkan password sementara")
 pw_ae = m_ae.group(1)
@@ -2829,8 +2843,8 @@ must("Wali Kelas UJI-Kelas-Pilih" in menu_ae,
      "AE: label sesi terbaca 'Wali Kelas UJI-Kelas-Pilih'")
 
 # --- wali dicabut: pilihan hilang & jalur login mati ---
-s, url, hasil = req(admin, f"/admin/kelas/{kp_id}/edit",
-                    {"nama": "UJI-Kelas-Pilih", "wali_id": "0"})
+s, url, hasil = req(admin, f"/admin/kelas/{kp_id}/wali",
+                    {"wali_id": ""})
 must("dicabut" in hasil, "AE: wali UJI-Kelas-Pilih dicabut untuk uji jalur mati")
 s, url, login_ae2 = req(client(), "/login")
 must("Wali Kelas UJI-Kelas-Pilih" not in login_ae2,
@@ -2901,8 +2915,8 @@ must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == "",
      "AF: guru baru: pass_sementara kosong di DB")
 
 # --- penunjukan: password flash tampil juga sebagai "PW: ..." ---
-s, url, hasil = req(admin, f"/admin/kelas/{kpw_id}/edit",
-                    {"nama": "UJI-Kelas-PW", "wali_id": str(gpw)})
+s, url, hasil = req(admin, f"/admin/kelas/{kpw_id}/wali",
+                    {"wali_id": str(gpw)})
 m_af = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
 must(m_af is not None, "AF: penunjukan menerbitkan kredensial (flash tetap ada)")
 pw_af1 = m_af.group(2)
@@ -3015,8 +3029,8 @@ os.remove(DBPULIH_AF)
 # --- penugasan dicabut: baris PW hilang & nilai dibersihkan ---
 start_server()  # kembali ke DB scratch utama (DBUJI)
 admin, url, _ = login("admin", "admin123")
-s, url, hasil = req(admin, f"/admin/kelas/{kpw_id}/edit",
-                    {"nama": "UJI-Kelas-PW", "wali_id": "0"})
+s, url, hasil = req(admin, f"/admin/kelas/{kpw_id}/wali",
+                    {"wali_id": ""})
 must("dicabut" in hasil, "AF: penugasan wali UJI-Kelas-PW dicabut")
 must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == "",
      "AF: DB: pass_sementara dibersihkan saat penugasan dicabut")
@@ -3031,8 +3045,8 @@ req(admin, "/admin/kelas", {"nama": "UJI-Kelas-PW2"})
 s, url, form_siswa_af = req(admin, "/admin/siswa")
 kpw2_id = opt_val(form_siswa_af, "UJI-Kelas-PW2")
 must(kpw2_id, "AF: kelas UJI-Kelas-PW2 dibuat")
-s, url, hasil = req(admin, f"/admin/kelas/{kpw2_id}/edit",
-                    {"nama": "UJI-Kelas-PW2", "wali_id": str(gpb)})
+s, url, hasil = req(admin, f"/admin/kelas/{kpw2_id}/wali",
+                    {"wali_id": str(gpb)})
 m_af4 = re.search(r"password sementara: (\S+)", hasil)
 must(m_af4 is not None, "AF: Guru PW Bebas ditunjuk wali UJI-Kelas-PW2")
 must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpb,)) == m_af4.group(1),
@@ -3046,6 +3060,292 @@ chunk_bebas = next((c for c in daftar_guru_af.split("<tr>")
                     if "<b>Guru PW Bebas</b>" in c), "")
 must("PW:" not in chunk_bebas,
      "AF: sesudah kelasnya dihapus, Guru PW Bebas tanpa baris PW lagi")
+
+# ===========================================================================
+# Fase AG — WALI KELAS DIPILIH LANGSUNG DARI KOLOM TABEL (permintaan
+# user: "di kolom ini wali kelas nya dibuat jadi pilihan nama guru aja,
+# jadi ga usah buat wali kelas di kelas lagi"): kolom Wali Kelas pada
+# Kelola Kelas adalah <select> nama guru yang terkirim otomatis saat
+# diganti (POST /admin/kelas/<id>/wali, field wali_id; "" = cabut).
+# Penunjukan/penggantian/pencabutan memakai mesin yang sama persis
+# (_wali_dari_form + _tetapkan_wali): flash kredensial + baris "PW:"
+# sinkron, login lama mati & pass_sementara lama dibersihkan, pilihan
+# yang sama = no-op, wali kelas lain DITOLAK, guru nonaktif DITOLAK,
+# dan sesi wali DIBLOKIR dari endpoint ini (khusus admin).
+# ===========================================================================
+start_server()  # waktu nyata: data khas fase ini lewat alur admin
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Sebaris-1"})
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Sebaris-2"})
+s, url, form_siswa_ag = req(admin, "/admin/siswa")
+ki1 = opt_val(form_siswa_ag, "UJI-Kelas-Sebaris-1")
+ki2 = opt_val(form_siswa_ag, "UJI-Kelas-Sebaris-2")
+must(ki1 and ki2, "AG: kelas UJI-Kelas-Sebaris-1 & -2 dibuat")
+req(admin, "/admin/guru", {"nama": "Guru Sebaris Satu", "mapel": "UJI-SebarisMapel"})
+req(admin, "/admin/guru", {"nama": "Guru Sebaris Dua", "mapel": "UJI-SebarisMapel"})
+req(admin, "/admin/guru", {"nama": "Guru Sebaris Nonaktif", "mapel": "UJI-SebarisMapel"})
+s, url, daftar_guru_ag = req(admin, "/admin/guru")
+gi1 = id_dari_daftar(daftar_guru_ag, "/admin/guru", "<b>Guru Sebaris Satu</b>")
+gi2 = id_dari_daftar(daftar_guru_ag, "/admin/guru", "<b>Guru Sebaris Dua</b>")
+gina = id_dari_daftar(daftar_guru_ag, "/admin/guru", "<b>Guru Sebaris Nonaktif</b>")
+must(gi1 and gi2 and gina, "AG: id ketiga guru terbaca")
+
+# --- rendering: satu form dropdown per baris, "— Belum ada —" terpilih ---
+s, url, daftar_kelas_ag = req(admin, "/admin/kelas")
+chunk_i1 = next((c for c in daftar_kelas_ag.split("<tr>")
+                 if "UJI-Kelas-Sebaris-1" in c), "")
+chunk_i2 = next((c for c in daftar_kelas_ag.split("<tr>")
+                 if "UJI-Kelas-Sebaris-2" in c), "")
+for chunk, kid, ket in ((chunk_i1, ki1, "1"), (chunk_i2, ki2, "2")):
+    must(f'action="/admin/kelas/{kid}/wali"' in chunk
+         and '<select name="wali_id"' in chunk
+         and 'onchange="this.form.submit()"' in chunk,
+         f"AG: baris Sebaris-{ket}: form dropdown wali sebaris "
+         "(terkirim otomatis saat diganti)")
+    must('<option value="" selected>' in chunk,
+         f"AG: baris Sebaris-{ket}: '— Belum ada —' (value='') terpilih "
+         "selama belum ada wali")
+    must("Guru Sebaris Satu" in chunk and "Guru Sebaris Dua" in chunk,
+         f"AG: baris Sebaris-{ket}: dropdown memuat guru yang bebas")
+
+# --- penunjukan lewat endpoint sebaris: flash + baris PW sinkron ---
+s, url, hasil = req(admin, f"/admin/kelas/{ki1}/wali", {"wali_id": str(gi1)})
+m_ag = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
+must(m_ag is not None and m_ag.group(1) == "waliujikelassebaris1",
+     "AG: penunjukan sebaris menerbitkan username waliujikelassebaris1 "
+     "+ password acak")
+pw_ag1 = m_ag.group(2)
+must(dbq("SELECT wali_id FROM classes WHERE id=?", (ki1,)) == gi1,
+     "AG: DB: wali Sebaris-1 = Guru Sebaris Satu")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gi1,)) == pw_ag1,
+     "AG: DB: pass_sementara = password dari flash penunjukan sebaris")
+s, url, daftar_guru_ag = req(admin, "/admin/guru")
+chunk_gi1 = next((c for c in daftar_guru_ag.split("<tr>")
+                  if "<b>Guru Sebaris Satu</b>" in c), "")
+must(f"PW: {pw_ag1}" in chunk_gi1,
+     "AG: Kelola Guru menampilkan 'PW: <password sebaris>' di sebelah username")
+
+# --- rendering sesudah penunjukan: terpilih di barisnya, tersisih di lain ---
+s, url, daftar_kelas_ag = req(admin, "/admin/kelas")
+chunk_i1 = next((c for c in daftar_kelas_ag.split("<tr>")
+                 if "UJI-Kelas-Sebaris-1" in c), "")
+chunk_i2 = next((c for c in daftar_kelas_ag.split("<tr>")
+                 if "UJI-Kelas-Sebaris-2" in c), "")
+must(re.search(r'<option value="%d" selected>Guru Sebaris Satu' % gi1,
+               chunk_i1) is not None,
+     "AG: dropdown baris Sebaris-1: wali saat ini TERPILIH (selected)")
+must("Guru Sebaris Satu" not in chunk_i2,
+     "AG: dropdown baris Sebaris-2: wali kelas lain TIDAK ditawarkan")
+must("Guru Sebaris Dua" in chunk_i2,
+     "AG: dropdown baris Sebaris-2: guru bebas tetap ditawarkan")
+
+# --- login wali dengan password terbitan alur sebaris ---
+wali_ag = client()
+s, url, hal = req(wali_ag, "/login-wali",
+                  {"kelas_id": str(ki1), "password": pw_ag1})
+must("dashboard" in url,
+     "AG: /login-wali berhasil dengan password terbitan dropdown sebaris")
+
+# --- pilihan yang sama = no-op: password TIDAK diterbitkan ulang ---
+s, url, hasil = req(admin, f"/admin/kelas/{ki1}/wali", {"wali_id": str(gi1)})
+must("password sementara" not in hasil,
+     "AG: memilih wali yang sama: tidak ada password baru (no-op)")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gi1,)) == pw_ag1,
+     "AG: pass_sementara tidak berubah pada pilihan yang sama")
+
+# --- penolakan: guru yang sudah wali kelas lain tidak bisa diambil ---
+s, url, hasil = req(admin, f"/admin/kelas/{ki2}/wali", {"wali_id": str(gi1)})
+must("sudah menjadi wali kelas" in hasil,
+     "AG: menunjuk wali kelas lain ke kelas ini -> DITOLAK dengan pesan salah")
+must(dbq("SELECT wali_id FROM classes WHERE id=?", (ki2,)) is None,
+     "AG: DB: Sebaris-2 tetap tanpa wali sesudah penolakan")
+must(dbq("SELECT wali_id FROM classes WHERE id=?", (ki1,)) == gi1,
+     "AG: DB: penugasan Sebaris-1 tidak terganggu oleh penolakan itu")
+
+# --- penolakan: guru nonaktif tidak bisa ditunjuk ---
+# (guru diberi riwayat dulu lewat catatan manual agar Hapus berarti
+# menonaktifkan, bukan menghapus permanen)
+s, url, hasil = req(admin, "/kehadiran/edit",
+                    {"tanggal": "2026-11-26", "tipe": "guru", "id": gina,
+                     "status": "Sakit", "jam": ""})
+must(dbq("SELECT status FROM kehadiran WHERE tanggal='2026-11-26' "
+         "AND ref_type='guru' AND ref_id=?", (gina,)) == "Sakit",
+     "AG: catatan manual Sakit untuk guru tersimpan (prasyarat nonaktif)")
+s, url, hasil = req(admin, f"/admin/guru/{gina}/hapus", {})
+must("dinonaktifkan" in hasil,
+     "AG: guru ber-riwayat dinonaktifkan lewat tombol Hapus")
+s, url, hasil = req(admin, f"/admin/kelas/{ki2}/wali", {"wali_id": str(gina)})
+must("Guru nonaktif tidak bisa ditunjuk" in hasil,
+     "AG: menunjuk guru nonaktif lewat dropdown -> DITOLAK")
+must(dbq("SELECT wali_id FROM classes WHERE id=?", (ki2,)) is None,
+     "AG: DB: Sebaris-2 tetap tanpa wali sesudah penolakan guru nonaktif")
+s, url, hasil = req(admin, f"/admin/guru/{gina}/aktifkan", {})
+must("diaktifkan kembali" in hasil, "AG: guru diaktifkan lagi (pembersihan)")
+
+# --- penggantian lewat dropdown: login lama mati, PW lama dibersihkan ---
+s, url, hasil = req(admin, f"/admin/kelas/{ki1}/wali", {"wali_id": str(gi2)})
+m_ag2 = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
+must(m_ag2 is not None and "Guru Sebaris Dua" in hasil,
+     "AG: penggantian sebaris menerbitkan kredensial wali baru")
+pw_ag2 = m_ag2.group(2)
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gi1,)) == "",
+     "AG: DB: pass_sementara wali LAMA dibersihkan saat diganti")
+must(dbq("SELECT username FROM users WHERE id=?", (gi1,)) == f"guru-{gi1}",
+     "AG: username wali lama diparkir ke 'guru-<id>'")
+g_ag_old, url, body = login("waliujikelassebaris1", pw_ag1)
+must("dashboard" not in url,
+     "AG: login wali LAMA mati sesudah penggantian sebaris")
+wali_ag2 = client()
+s, url, hal = req(wali_ag2, "/login-wali",
+                  {"kelas_id": str(ki1), "password": pw_ag2})
+must("dashboard" in url,
+     "AG: wali BARU bisa login (pilih kelas) sesudah penggantian sebaris")
+
+# --- sesi wali DIBLOKIR dari endpoint sebaris (khusus admin) ---
+try:
+    req(wali_ag2, f"/admin/kelas/{ki2}/wali", {"wali_id": str(gi1)})
+    must(False, "AG: wali POST endpoint sebaris harusnya 404")
+except urllib.error.HTTPError as e:
+    must(e.code == 404, "AG: wali POST /admin/kelas/<id>/wali -> 404 (khusus admin)")
+must(dbq("SELECT wali_id FROM classes WHERE id=?", (ki2,)) is None,
+     "AG: POST oleh wali tidak mengubah penugasan apa pun")
+
+# --- pencabutan lewat dropdown (wali_id kosong): login mati, PW bersih ---
+s, url, hasil = req(admin, f"/admin/kelas/{ki1}/wali", {"wali_id": ""})
+must("dicabut" in hasil,
+     "AG: memilih '— Belum ada —' mencabut wali (flash konfirmasi)")
+must(dbq("SELECT wali_id FROM classes WHERE id=?", (ki1,)) is None,
+     "AG: DB: wali_id NULL sesudah pencabutan sebaris")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gi2,)) == "",
+     "AG: DB: pass_sementara dibersihkan sesudah pencabutan sebaris")
+g_ag_old2, url, body = login("waliujikelassebaris1", pw_ag2)
+must("dashboard" not in url,
+     "AG: login wali mati sesudah pencabutan sebaris")
+
+# ===========================================================================
+# Fase AH — UNDUH EXCEL DETAIL SISWA (permintaan user: "buat detail
+# siswa ini bisa di donlot ya"): tombol "Unduh Excel" pada /siswa/<id>
+# mengarah ke GET /siswa/<id>/unduh yang mengembalikan .xlsx dua
+# lembar — "Rekap 6 Bulan" (kepala nama sekolah + judul "Detail
+# Absensi Siswa" + identitas Nama/NIS/Kelas, tabel rekap persis
+# halaman termasuk baris Total) dan "Rincian Kehadiran"
+# (Tanggal/Status/Jam persis halaman) — dibangun dari data yang sama
+# dengan halamannya (_data_detail_siswa). Izin unduh menyamai izin
+# membuka halaman detail. Skenario meniru Fase AC: scan Terlambat
+# 14 Sep 2026, scan Hadir 25 Nov 2026, Sakit manual 24 Nov (+ Alpa
+# otomatis 23 Nov dari tabel mingguan).
+# ===========================================================================
+start_server()  # waktu nyata: siapkan data khas fase ini
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-Unduh"})
+s, url, form_siswa_ah = req(admin, "/admin/siswa")
+kdl = opt_val(form_siswa_ah, "UJI-Kelas-Unduh")
+must(kdl, "AH: kelas UJI-Kelas-Unduh dibuat")
+req(admin, "/admin/siswa", {"nama": "Siswa Unduh Uji", "kode": "UJI-DL1",
+                            "class_id": kdl})
+dl_id = dbq("SELECT id FROM students WHERE kode='UJI-DL1'")
+must(dl_id, "AH: id Siswa Unduh Uji terbaca")
+start_server("2026-09-14T07:30:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-DL1"})
+must("Terlambat" in hasil, "AH: scan Siswa Unduh Uji 14 Sep 07:30 -> Terlambat")
+start_server("2026-11-25T06:45:00")
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, "/api/scan", {"kode": "UJI-DL1"})
+must("Hadir" in hasil, "AH: scan Siswa Unduh Uji 25 Nov 06:45 -> Hadir")
+s, url, hasil = req(admin, "/kehadiran/edit",
+                    {"tanggal": "2026-11-24", "tipe": "siswa", "id": dl_id,
+                     "status": "Sakit", "jam": ""})
+must("ditandai Sakit" in hasil, "AH: Siswa Unduh Uji ditandai Sakit 24 Nov")
+
+# --- tombol pada halaman detail ---
+s, url, det_ah = req(admin, f"/siswa/{dl_id}")
+must(f'href="/siswa/{dl_id}/unduh"' in det_ah and "Unduh Excel" in det_ah,
+     "AH: halaman detail memuat tombol 'Unduh Excel' ke /siswa/<id>/unduh")
+
+# --- unduhan: 200 + tipe xlsx + nama berkas ---
+st, hdr, xdata = req_bytes(admin, f"/siswa/{dl_id}/unduh")
+must(st == 200, "AH: unduhan detail siswa berstatus 200")
+must(hdr.get_content_type()
+     == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+     "AH: unduhan bertipe konten .xlsx (spreadsheetml)")
+disp = hdr.get("Content-Disposition", "")
+must("Detail-Siswa-" in disp and "UJI-DL1" in disp
+     and disp.endswith('.xlsx"'),
+     "AH: nama berkas unduhan Detail-Siswa-<Nama>-<NIS>.xlsx")
+
+# --- isi berkas: persis halaman (dibaca balik dengan openpyxl) ---
+from openpyxl import load_workbook
+wb_ah = load_workbook(io.BytesIO(xdata))
+must(wb_ah.sheetnames == ["Rekap 6 Bulan", "Rincian Kehadiran"],
+     "AH: berkas punya dua lembar: 'Rekap 6 Bulan' & 'Rincian Kehadiran'")
+ws1 = wb_ah["Rekap 6 Bulan"]
+must(ws1["A1"].value
+     == dbq("SELECT value FROM settings WHERE key='nama_sekolah'"),
+     "AH: lembar rekap memuat nama sekolah dari pengaturan pada kepala")
+must(ws1["A2"].value == "Detail Absensi Siswa",
+     "AH: lembar rekap: judul 'Detail Absensi Siswa'")
+must(ws1["A3"].value == "Nama" and ws1["B3"].value == "Siswa Unduh Uji",
+     "AH: identitas Nama pada berkas")
+must(ws1["A4"].value == "NIS" and ws1["B4"].value == "UJI-DL1",
+     "AH: identitas NIS pada berkas")
+must(ws1["A5"].value == "Kelas" and ws1["B5"].value == "UJI-Kelas-Unduh",
+     "AH: identitas Kelas pada berkas")
+kepala1 = [ws1.cell(row=7, column=j).value for j in range(1, 7)]
+must(kepala1 == ["Bulan", "Hadir", "Terlambat", "Sakit", "Izin", "Alpa"],
+     "AH: kepala tabel rekap persis halaman")
+
+
+def baris_rekap_xlsx(ws, label):
+    for r in range(8, 14):
+        if ws.cell(row=r, column=1).value == label:
+            return tuple(ws.cell(row=r, column=j).value
+                         for j in range(2, 7))
+    return None
+
+
+must(baris_rekap_xlsx(ws1, "September 2026") == (0, 1, 0, 0, 0),
+     "AH: rekap September 2026 pada berkas: Terlambat 1 (sama dgn halaman)")
+must(baris_rekap_xlsx(ws1, "November 2026") == (1, 0, 1, 0, 1),
+     "AH: rekap November 2026 pada berkas: Hadir 1, Sakit 1, Alpa 1")
+must(ws1.cell(row=14, column=1).value == "Total"
+     and tuple(ws1.cell(row=14, column=j).value for j in range(2, 7))
+     == (1, 1, 1, 0, 1),
+     "AH: baris Total pada berkas: Hadir 1, Terlambat 1, Sakit 1, "
+     "Izin 0, Alpa 1")
+ws2 = wb_ah["Rincian Kehadiran"]
+kepala2 = [ws2.cell(row=1, column=j).value for j in range(1, 4)]
+must(kepala2 == ["Tanggal", "Status", "Jam"],
+     "AH: kepala tabel rincian persis halaman")
+baris_rincian = [tuple(ws2.cell(row=r, column=j).value for j in range(1, 4))
+                 for r in range(2, 6)]
+must(baris_rincian == [("Rabu, 25 November 2026", "Hadir", "06:45"),
+                       ("Selasa, 24 November 2026", "Sakit", "—"),
+                       ("Senin, 23 November 2026", "Alpa", "—"),
+                       ("Senin, 14 September 2026", "Terlambat", "07:30")],
+     "AH: baris rincian pada berkas persis halaman (terbaru dulu, jam "
+     "HH:MM untuk scan, '—' untuk Sakit/Alpa)")
+must(ws2.cell(row=6, column=1).value is None,
+     "AH: rincian pada berkas tepat 4 baris (tidak lebih)")
+
+# --- izin unduh menyamai izin halaman detail ---
+guru_ah, url, _ = login(WALI_G1_USER, WALI_G1_PW)
+s, url, hal = req(guru_ah, f"/siswa/{dl_id}/unduh")
+must(urllib.parse.urlparse(url).path == "/dashboard"
+     and "Data tidak ditemukan." in hal,
+     "AH: wali kelas lain DIBLOKIR mengunduh detail siswa ini")
+st, hdr, xdata_w = req_bytes(guru_ah, f"/siswa/{A_id}/unduh")
+must(st == 200
+     and hdr.get_content_type()
+     == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+     "AH: wali BISA mengunduh detail siswa kelasnya sendiri")
+anon_ah = client()
+s, url, hal = req(anon_ah, f"/siswa/{dl_id}/unduh")
+must(urllib.parse.urlparse(url).path == "/login",
+     "AH: anonim mengunduh -> diarahkan ke /login")
+s, url, hasil = req(admin, "/siswa/99999/unduh")
+must("Data tidak ditemukan." in hasil,
+     "AH: unduh id tak dikenal -> 'Data tidak ditemukan.'")
 
 stop_server()
 if os.path.exists(DBUJI):

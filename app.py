@@ -607,6 +607,17 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.parse_qs(raw)
         return {k: v[0] for k, v in parsed.items()}
 
+    def form_lengkap(self):
+        """Seperti form(), tetapi nilai kosong DIPERTAHANKAN
+        (keep_blank_values=True): dibutuhkan endpoint yang memakai
+        value="" sebagai pilihan sah — dropdown wali sebaris di Kelola
+        Kelas mengirim wali_id="" untuk pilihan "— Belum ada —", yang
+        oleh parse_qs bawaan akan dibuang sebelum sampai ke handler."""
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
+        parsed = urllib.parse.parse_qs(raw, keep_blank_values=True)
+        return {k: v[0] for k, v in parsed.items()}
+
     # -- routing ------------------------------------------------------------
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -706,6 +717,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.dashboard(user, flash)
         if path == "/cari":
             return self.cari(user, qs, flash)
+        if (path.startswith("/siswa/") and path.endswith("/unduh")
+                and path.split("/")[2].isdigit()):
+            return self.siswa_detail_unduh(user, int(path.split("/")[2]))
         if path.startswith("/siswa/") and path.split("/")[2].isdigit():
             return self.siswa_detail(user, int(path.split("/")[2]), flash)
         if path == "/laporan/siswa":
@@ -788,6 +802,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
                                       status=404)
             return self.post_admin_backup_pulihkan()
+        if path.startswith("/admin/kelas/") and path.endswith("/wali"):
+            if user["role"] != "admin":
+                return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                                      status=404)
+            # Form dibaca dengan form_lengkap(): pilihan "— Belum ada —"
+            # pada dropdown sebaris bernilai "" dan harus sampai.
+            return self.post_admin_kelas_wali(int(path.split("/")[3]),
+                                              self.form_lengkap())
         f = self.form()
         if path == "/ganti-password":
             ph, salt = hash_password(f["password"])
@@ -2166,22 +2188,23 @@ def _cari(self, user, qs, flash):
     return self.send_html(layout(user, "Pencarian", body, flash))
 
 
-def _siswa_detail(self, user, sid, flash):
-    """Detail satu siswa: identitas + Rekap Absensi 6 Bulan Terakhir
-    (bulan berjalan dan 5 bulan kalender sebelumnya, Asia/Jakarta),
-    dihitung dari tabel kehadiran. Boleh dibuka admin & guru."""
-    conn = db()
+def _data_detail_siswa(conn, sid):
+    """Data mentah Detail Siswa: (baris siswa, rekap, total, rincian).
+
+    Dipakai bersama oleh halaman /siswa/<id> DAN unduhan Excel-nya
+    (GET /siswa/<id>/unduh) agar isi berkas selalu persis sama dengan
+    yang tampil di halaman. rekap: [(label bulan, [n per status]), ...]
+    untuk 6 bulan kalender terakhir (bulan berjalan + 5 sebelumnya,
+    Asia/Jakarta), urutan status Hadir, Terlambat, Sakit, Izin, Alpa;
+    total: dict status -> jumlah; rincian: baris kehadiran (tanggal,
+    status, jam) pada jendela yang sama, terbaru dulu. None bila siswa
+    tidak ditemukan."""
     st = conn.execute(
         """SELECT s.*, c.nama AS kelas FROM students s
            JOIN classes c ON c.id = s.class_id WHERE s.id=?""",
         (sid,)).fetchone()
     if not st:
-        conn.close()
-        return self.redirect("/cari", "Data tidak ditemukan.")
-    if user["role"] == "guru" and st["class_id"] != self.wali_kelas_id(user):
-        # Wali kelas hanya boleh membuka siswa kelasnya sendiri.
-        conn.close()
-        return self.redirect("/dashboard", "Data tidak ditemukan.")
+        return None
     hari_ini = waktu_sekarang().date()
     # Enam bulan kalender berurutan: 5 bulan lalu .. bulan berjalan.
     bulan_list = []
@@ -2194,7 +2217,7 @@ def _siswa_detail(self, user, sid, flash):
     bulan_list.reverse()
     status_list = ("Hadir", "Terlambat", "Sakit", "Izin", "Alpa")
     total = {s: 0 for s in status_list}
-    baris = ""
+    rekap = []
     for (y, m) in bulan_list:
         awal = f"{y:04d}-{m:02d}-01"
         y2, m2 = (y + 1, 1) if m == 12 else (y, m + 1)
@@ -2204,13 +2227,12 @@ def _siswa_detail(self, user, sid, flash):
                WHERE ref_type='siswa' AND ref_id=?
                  AND tanggal>=? AND tanggal<?
                GROUP BY status""", (sid, awal, akhir)).fetchall()}
-        sel = ""
+        angka = []
         for s in status_list:
             n = hitung.get(s, 0)
             total[s] += n
-            sel += f"<td>{n}</td>"
-        baris += (f'<tr><td class="nama">{NAMA_BULAN[m - 1]} {y}</td>'
-                  f'{sel}</tr>')
+            angka.append(n)
+        rekap.append((f"{NAMA_BULAN[m - 1]} {y}", angka))
     # Rincian per catatan pada jendela 6 bulan yang sama, terbaru dulu.
     # Kolom Jam hanya terisi untuk catatan scan (Hadir/Terlambat);
     # Sakit/Izin/Alpa tampil "—" (keterangannya adalah tanggalnya).
@@ -2223,7 +2245,29 @@ def _siswa_detail(self, user, sid, flash):
            WHERE ref_type='siswa' AND ref_id=? AND tanggal>=? AND tanggal<?
            ORDER BY tanggal DESC""",
         (sid, awal_window, akhir_window)).fetchall()
+    return st, rekap, total, rincian_rows
+
+
+def _siswa_detail(self, user, sid, flash):
+    """Detail satu siswa: identitas + Rekap Absensi 6 Bulan Terakhir
+    (bulan berjalan dan 5 bulan kalender sebelumnya, Asia/Jakarta),
+    dihitung dari tabel kehadiran. Boleh dibuka admin & guru."""
+    conn = db()
+    data = _data_detail_siswa(conn, sid)
+    if not data:
+        conn.close()
+        return self.redirect("/cari", "Data tidak ditemukan.")
+    st, rekap, total, rincian_rows = data
+    if user["role"] == "guru" and st["class_id"] != self.wali_kelas_id(user):
+        # Wali kelas hanya boleh membuka siswa kelasnya sendiri.
+        conn.close()
+        return self.redirect("/dashboard", "Data tidak ditemukan.")
     conn.close()
+    status_list = ("Hadir", "Terlambat", "Sakit", "Izin", "Alpa")
+    baris = ""
+    for label, angka in rekap:
+        sel = "".join(f"<td>{n}</td>" for n in angka)
+        baris += f'<tr><td class="nama">{label}</td>{sel}</tr>'
     rincian = ""
     for rr in rincian_rows:
         d = datetime.strptime(rr["tanggal"], "%Y-%m-%d").date()
@@ -2255,6 +2299,7 @@ def _siswa_detail(self, user, sid, flash):
     <div class="card">
       <p><b>{esc(st["nama"])}</b></p>
       <p class="muted">NIS: <code>{esc(st["kode"])}</code> &mdash; Kelas: {esc(st["kelas"])}{edit}</p>
+      <p><a class="btn btn-excel" href="/siswa/{st['id']}/unduh">{icon("download")} Unduh Excel</a></p>
     </div>
     <div class="card table-card"><h3>Rekap Absensi 6 Bulan Terakhir</h3>
     <div class="table-scroll">
@@ -2265,6 +2310,165 @@ def _siswa_detail(self, user, sid, flash):
     {rincian_html}
     {kembali}"""
     return self.send_html(layout(user, "Detail Siswa", body, flash))
+
+
+def _buat_excel_detail_siswa(data, nama_sekolah):
+    """Bangun .xlsx Detail Siswa dari data _data_detail_siswa.
+
+    Lembar "Rekap 6 Bulan": kepala berisi nama sekolah (dari
+    pengaturan) + judul "Detail Absensi Siswa" + blok identitas
+    (Nama/NIS/Kelas), lalu tabel rekap persis halaman (Bulan, Hadir,
+    Terlambat, Sakit, Izin, Alpa + baris Total tebal). Lembar "Rincian
+    Kehadiran": baris rincian persis halaman (Tanggal, Status, Jam —
+    Jam HH:MM untuk Hadir/Terlambat, "—" untuk Sakit/Izin/Alpa).
+    Gaya mengikuti ekspor mingguan (_buat_excel): judul biru 1F3864,
+    kepala tabel 203764 huruf putih, garis tipis, zebra, warna status."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    st, rekap, total, rincian_rows = data
+    status_list = ("Hadir", "Terlambat", "Sakit", "Izin", "Alpa")
+    tipis = Side(style="thin", color="9AA3B2")
+    border = Border(left=tipis, right=tipis, top=tipis, bottom=tipis)
+    fill_head = PatternFill("solid", fgColor="203764")
+    font_head = Font(bold=True, color="FFFFFF", size=11)
+    fill_status = {"Hadir": "C6EFCE", "Terlambat": "FFEB9C", "Sakit": "BDD7EE",
+                   "Izin": "E4DFEC", "Alpa": "FFC7CE"}
+    font_status = {"Hadir": "006100", "Terlambat": "9C6500", "Sakit": "1F4E79",
+                   "Izin": "5B4A8A", "Alpa": "9C0006"}
+    wb = Workbook()
+    # --- lembar 1: Rekap 6 Bulan ---
+    ws = wb.active
+    ws.title = "Rekap 6 Bulan"
+    ws.merge_cells("A1:F1")
+    c = ws["A1"]
+    c.value = nama_sekolah
+    c.font = Font(bold=True, size=16, color="1F3864")
+    ws.merge_cells("A2:F2")
+    c = ws["A2"]
+    c.value = "Detail Absensi Siswa"
+    c.font = Font(bold=True, size=15, color="1F3864")
+    for i, (label, nilai) in enumerate(
+            (("Nama", st["nama"]), ("NIS", st["kode"]),
+             ("Kelas", st["kelas"]))):
+        r = 3 + i
+        c = ws.cell(row=r, column=1, value=label)
+        c.font = Font(bold=True, size=11, color="404040")
+        ws.merge_cells(start_row=r, start_column=2,
+                       end_row=r, end_column=6)
+        ws.cell(row=r, column=2, value=nilai).font = Font(size=11)
+    r_head = 7
+    for j, h in enumerate(["Bulan", *status_list], start=1):
+        c = ws.cell(row=r_head, column=j, value=h)
+        c.fill = fill_head
+        c.font = font_head
+        c.border = border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    r = r_head + 1
+    for i, (label, angka) in enumerate(rekap):
+        zebra = (PatternFill("solid", fgColor="F2F5FA")
+                 if i % 2 == 1 else None)
+        c = ws.cell(row=r, column=1, value=label)
+        c.border = border
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        if zebra:
+            c.fill = zebra
+        for j, n in enumerate(angka, start=2):
+            c = ws.cell(row=r, column=j, value=n)
+            c.border = border
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            if zebra:
+                c.fill = zebra
+        r += 1
+    c = ws.cell(row=r, column=1, value="Total")
+    c.font = Font(bold=True)
+    c.border = border
+    for j, s in enumerate(status_list, start=2):
+        c = ws.cell(row=r, column=j, value=total[s])
+        c.font = Font(bold=True)
+        c.border = border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.column_dimensions["A"].width = 22
+    for j in range(2, 7):
+        ws.column_dimensions[get_column_letter(j)].width = 11
+    ws.freeze_panes = "A8"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    # --- lembar 2: Rincian Kehadiran ---
+    ws2 = wb.create_sheet("Rincian Kehadiran")
+    for j, h in enumerate(["Tanggal", "Status", "Jam"], start=1):
+        c = ws2.cell(row=1, column=j, value=h)
+        c.fill = fill_head
+        c.font = font_head
+        c.border = border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    r = 2
+    for rr in rincian_rows:
+        d = datetime.strptime(rr["tanggal"], "%Y-%m-%d").date()
+        tgl_fmt = f"{NAMA_HARI[d.weekday()]}, {fmt_tanggal(d)}"
+        jam_fmt = (rr["jam"] if rr["status"] in ("Hadir", "Terlambat")
+                   and rr["jam"] else "—")
+        c = ws2.cell(row=r, column=1, value=tgl_fmt)
+        c.border = border
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        c = ws2.cell(row=r, column=2, value=rr["status"])
+        c.border = border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.fill = PatternFill("solid", fgColor=fill_status[rr["status"]])
+        c.font = Font(color=font_status[rr["status"]], size=10)
+        c = ws2.cell(row=r, column=3, value=jam_fmt)
+        c.border = border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        r += 1
+    if not rincian_rows:
+        ws2.merge_cells("A2:C2")
+        c = ws2["A2"]
+        c.value = "Belum ada catatan kehadiran pada 6 bulan terakhir."
+        c.font = Font(color="667085", size=11)
+    ws2.column_dimensions["A"].width = 30
+    ws2.column_dimensions["B"].width = 14
+    ws2.column_dimensions["C"].width = 10
+    ws2.freeze_panes = "A2"
+    ws2.sheet_properties.pageSetUpPr.fitToPage = True
+    ws2.page_setup.fitToWidth = 1
+    ws2.page_setup.fitToHeight = 0
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _siswa_detail_unduh(self, user, sid):
+    """Unduh Detail Siswa sebagai .xlsx (GET /siswa/<id>/unduh).
+
+    Isinya dibangun dari _data_detail_siswa — data yang sama persis
+    dengan halaman detailnya — dan izinnya menyamai halaman itu:
+    admin bebas; wali kelas hanya untuk siswa kelasnya sendiri
+    (selain itu ditolak seperti halaman detail); siswa tak dikenal
+    juga ditolak dengan cara yang sama."""
+    conn = db()
+    data = _data_detail_siswa(conn, sid)
+    if not data:
+        conn.close()
+        return self.redirect("/cari", "Data tidak ditemukan.")
+    st = data[0]
+    if user["role"] == "guru" and st["class_id"] != self.wali_kelas_id(user):
+        # Wali kelas hanya boleh mengunduh siswa kelasnya sendiri.
+        conn.close()
+        return self.redirect("/dashboard", "Data tidak ditemukan.")
+    conn.close()
+    berkas = _buat_excel_detail_siswa(data,
+                                      get_pengaturan()["nama_sekolah"])
+
+    def bersih(s):
+        return re.sub(r"[^\w.\-]+", "_", str(s)).strip("_") or "siswa"
+
+    nama_file = (f"Detail-Siswa-{bersih(st['nama'])}"
+                 f"-{bersih(st['kode'])}.xlsx")
+    return self.send_bytes(
+        berkas,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=nama_file)
 
 
 def _admin_guru(self, user, flash):
@@ -2498,12 +2702,15 @@ def _simple_list(self, user, flash, table, title, action, label, aktif_key):
     return self.send_html(layout(user, title, body, flash, aktif=aktif_key))
 
 
-def _opsi_wali(self, conn, kelas_id=None):
-    """HTML <option> untuk pemilih Wali Kelas pada form kelas: pilihan
-    kosong "— Belum ada —" + semua guru AKTIF ("Nama — Mapel"), KECUALI
+def _opsi_wali(self, conn, kelas_id=None, nilai_kosong="0"):
+    """HTML <option> untuk pemilih Wali Kelas: pilihan kosong
+    "— Belum ada —" + semua guru AKTIF ("Nama — Mapel"), KECUALI
     guru yang sudah menjadi wali kelas LAIN (satu guru maksimal satu
     kelas). Wali kelas ini sendiri tetap tampil dan terpilih — termasuk
-    bila sedang nonaktif, agar penugasannya tidak hilang diam-diam."""
+    bila sedang nonaktif, agar penugasannya tidak hilang diam-diam.
+    nilai_kosong: nilai untuk pilihan kosong — "0" (bawaan, untuk form
+    biasa) atau "" (untuk dropdown sebaris di tabel Kelola Kelas, yang
+    endpoint-nya membaca form dengan keep_blank_values)."""
     rows = conn.execute(
         "SELECT id, nama, mapel FROM users WHERE role='guru' AND aktif=1 "
         "ORDER BY nama").fetchall()
@@ -2514,9 +2721,13 @@ def _opsi_wali(self, conn, kelas_id=None):
         r = conn.execute("SELECT wali_id FROM classes WHERE id=?",
                          (kelas_id,)).fetchone()
         cur = r["wali_id"] if r else None
-    # Nilai kosong memakai sentinel "0": parse_qs membuang nilai kosong,
-    # jadi value="" tidak akan pernah sampai ke server.
-    opts = '<option value="0">&mdash; Belum ada &mdash;</option>'
+    # Nilai kosong bawaan memakai sentinel "0": parse_qs membuang nilai
+    # kosong, jadi value="" tidak akan pernah sampai ke server lewat
+    # form() biasa. Dropdown sebaris memakai nilai_kosong="" karena
+    # endpoint-nya membaca form dengan keep_blank_values (form_lengkap).
+    sel_kosong = " selected" if nilai_kosong == "" and not cur else ""
+    opts = (f'<option value="{nilai_kosong}"{sel_kosong}>'
+            "&mdash; Belum ada &mdash;</option>")
     tampil = set()
     for g in rows:
         if terpakai.get(g["id"]) not in (None, kelas_id):
@@ -2620,12 +2831,20 @@ def _admin_kelas(self, user, flash):
            FROM classes c LEFT JOIN users u ON u.id = c.wali_id
            ORDER BY c.nama""").fetchall()
     opsi_wali = self._opsi_wali(conn, None)
+    # Opsi dropdown wali SEBARIS per kelas: kolom Wali Kelas adalah
+    # <select> nama guru yang langsung menunjuk/mengganti/mencabut wali
+    # kelas itu saat diganti (POST /admin/kelas/<id>/wali).
+    opsi_baris = {r["id"]: self._opsi_wali(conn, r["id"], nilai_kosong="")
+                  for r in rows}
     conn.close()
     items = ""
     for i, r in enumerate(rows):
         confirm_msg = f"Hapus kelas {js_str(r['nama'])}?"
-        sel_wali = (esc(r["wali_nama"]) if r["wali_nama"]
-                    else '<span class="muted">&mdash; Belum ada</span>')
+        sel_wali = (
+            f'<form method="post" action="/admin/kelas/{r["id"]}/wali" '
+            f'class="inline"><select name="wali_id" class="wali-pilih" '
+            f'onchange="this.form.submit()">{opsi_baris[r["id"]]}'
+            "</select></form>")
         items += (
             f'<tr><td class="no">{i + 1}</td>'
             f'<td class="nama"><b><a href="/admin/kelas/{r["id"]}">{esc(r["nama"])}</a></b></td>'
@@ -2647,7 +2866,8 @@ def _admin_kelas(self, user, flash):
       <label>Wali Kelas <select name="wali_id">{opsi_wali}</select></label>
       <p class="muted"><small>Memilih wali kelas langsung membuatkan login
       untuk guru itu (username &amp; password acak ditampilkan satu kali
-      sesudah disimpan). Wali bisa diganti/dicabut lewat Edit kelas.</small></p>
+      sesudah disimpan). Wali juga bisa ditunjuk, diganti, atau dicabut
+      langsung dari kolom Wali Kelas pada tabel di atas.</small></p>
       <button type="submit" class="btn btn-primary">Tambah</button></form></div>"""
     return self.send_html(layout(user, "Kelola Kelas", body, flash, aktif="kelas"))
 
@@ -2702,19 +2922,15 @@ def _simple_edit(self, user, table, action, label, item_id, flash, aktif_key):
 def _admin_kelas_edit(self, user, kid, flash):
     conn = db()
     row = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
-    if not row:
-        conn.close()
-        return self.redirect("/admin/kelas", "Data tidak ditemukan.")
-    opsi_wali = self._opsi_wali(conn, kid)
     conn.close()
+    if not row:
+        return self.redirect("/admin/kelas", "Data tidak ditemukan.")
     body = f"""<h2>Edit Kelas</h2>
     <form method="post" action="/admin/kelas/{row['id']}/edit" class="card form-card">
       <label>Nama <input name="nama" value="{esc(row['nama'])}" required></label>
-      <label>Wali Kelas <select name="wali_id">{opsi_wali}</select></label>
-      <p class="muted"><small>Mengganti wali membuatkan login baru untuk
-      wali yang baru (username &amp; password acak ditampilkan satu kali)
-      dan mematikan login wali sebelumnya. Membiarkan wali apa adanya
-      tidak mengubah passwordnya.</small></p>
+      <p class="muted"><small>Wali kelas TIDAK diatur di sini: penunjukan,
+      penggantian, dan pencabutan wali dilakukan langsung dari kolom
+      Wali Kelas pada daftar kelas (pilih nama guru pada baris kelasnya).</small></p>
       <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
     <p><a href="/admin/kelas">Kembali ke daftar kelas</a></p>"""
     return self.send_html(layout(user, "Edit Kelas", body, flash, aktif="kelas"))
@@ -2737,6 +2953,37 @@ def _post_simple_edit(self, table, action, label, item_id, f):
 
 
 def _post_admin_kelas_edit(self, kid, f):
+    # Hanya nama kelas yang diubah di sini. Penugasan wali TIDAK disentuh
+    # sama sekali (field wali_id — bila ikut terkirim — diabaikan):
+    # wali diatur lewat POST /admin/kelas/<id>/wali dari dropdown pada
+    # kolom Wali Kelas di daftar kelas.
+    conn = db()
+    row = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
+    if not row:
+        conn.close()
+        return self.redirect("/admin/kelas", "Data tidak ditemukan.")
+    try:
+        conn.execute("UPDATE classes SET nama=? WHERE id=?",
+                     (f["nama"].strip(), kid))
+    except sqlite3.IntegrityError:
+        conn.rollback(); conn.close()
+        return self.redirect(f"/admin/kelas/{kid}/edit", "Nama sudah ada.")
+    conn.commit(); conn.close()
+    return self.redirect("/admin/kelas", "Kelas diperbarui.")
+
+
+def _post_admin_kelas_wali(self, kid, f):
+    """Terapkan pilihan dari dropdown Wali Kelas SEBARIS pada tabel
+    Kelola Kelas (POST /admin/kelas/<id>/wali, field wali_id; nilai ""
+    = pilihan "— Belum ada —"). Memakai mesin yang sama persis dengan
+    alur penugasan wali yang sudah ada: _wali_dari_form memvalidasi
+    (guru harus ada, harus aktif, dan belum menjadi wali kelas LAIN —
+    pelanggaran ditolak dengan pesan kesalahan) dan _tetapkan_wali
+    menerapkan perubahannya (wali baru: username wali<slug> + password
+    acak yang teks biasanya ikut disimpan ke pass_sementara dan
+    ditampilkan SATU kali lewat flash; wali lama: username diparkir,
+    pass_sementara dikosongkan, login mati seketika; pilihan yang sama
+    dengan wali saat ini = tidak menyentuh apa pun)."""
     conn = db()
     row = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
     if not row:
@@ -2745,22 +2992,16 @@ def _post_admin_kelas_edit(self, kid, f):
     dikirim, wali_baru, err = self._wali_dari_form(conn, f, kid)
     if err:
         conn.close()
-        return self.redirect(f"/admin/kelas/{kid}/edit", err)
-    try:
-        conn.execute("UPDATE classes SET nama=? WHERE id=?",
-                     (f["nama"].strip(), kid))
-    except sqlite3.IntegrityError:
-        conn.rollback(); conn.close()
-        return self.redirect(f"/admin/kelas/{kid}/edit", "Nama sudah ada.")
-    pesan = None
-    if dikirim:
-        # Baris kelas dibaca ulang (nama mungkin baru saja diganti) —
-        # slug username wali memakai nama kelas yang berlaku sekarang.
-        kelas_baru = conn.execute("SELECT * FROM classes WHERE id=?",
-                                  (kid,)).fetchone()
-        pesan = self._tetapkan_wali(conn, kelas_baru, wali_baru)
+        return self.redirect("/admin/kelas", err)
+    if not dikirim:
+        conn.close()
+        return self.redirect("/admin/kelas",
+                             "Pilihan wali kelas tidak valid.")
+    pesan = self._tetapkan_wali(conn, row, wali_baru)
     conn.commit(); conn.close()
-    return self.redirect("/admin/kelas", pesan or "Kelas diperbarui.")
+    return self.redirect(
+        "/admin/kelas",
+        pesan or f"Wali kelas {row['nama']} tidak berubah.")
 
 
 def _post_admin_kelas_hapus(self, kid):
@@ -3394,6 +3635,7 @@ def _post_admin_backup_pulihkan(self):
 # Tempelkan handler-handler di atas sebagai method Handler.
 Handler.cari = _cari
 Handler.siswa_detail = _siswa_detail
+Handler.siswa_detail_unduh = _siswa_detail_unduh
 Handler.admin_guru = _admin_guru
 Handler.post_admin_guru = _post_admin_guru
 Handler._get_guru = _get_guru
@@ -3413,6 +3655,7 @@ Handler._simple_edit = _simple_edit
 Handler.admin_kelas_edit = _admin_kelas_edit
 Handler._post_simple_edit = _post_simple_edit
 Handler.post_admin_kelas_edit = _post_admin_kelas_edit
+Handler.post_admin_kelas_wali = _post_admin_kelas_wali
 Handler.post_admin_kelas_hapus = _post_admin_kelas_hapus
 Handler.admin_kelas_detail = _admin_kelas_detail
 Handler.admin_siswa = _admin_siswa

@@ -43,6 +43,10 @@ Ini proyek kode mandiri yang bisa di-deploy sendiri.
   menjadi latar semua halaman termasuk login, bisa diganti/dihapus).
 - **Dashboard**: kartu statistik hari ini (Siswa Hadir/Terlambat/
   Sakit-Izin/Alpa/Belum Scan, Guru Hadir) + daftar kedatangan terakhir.
+- **Detail Siswa** (dari Cari/tabel): Rekap Absensi 6 Bulan Terakhir +
+  Rincian Kehadiran per siswa, bisa **diunduh sebagai Excel** (.xlsx
+  dua lembar: Rekap 6 Bulan & Rincian Kehadiran) lewat tombol
+  **Unduh Excel** di halaman detailnya.
 - Tampilan modern ala aplikasi populer: sidebar di desktop, top bar +
   navigasi bawah di HP, ikon SVG inline, tanpa aset/font eksternal.
 
@@ -102,18 +106,22 @@ Alur pemakaian singkat:
 
 Hanya **wali kelas** yang bisa login sebagai guru. Modelnya:
 
-- **Penunjukan**: admin membuka **Kelola Kelas** → Tambah/Edit kelas →
-  kolom **Wali Kelas** diisi dengan *memilih* guru dari daftar guru yang
-  sudah dimasukkan (tidak perlu mengetik ulang nama). Satu kelas punya
-  paling banyak satu wali, dan satu guru menjadi wali untuk paling
-  banyak satu kelas (guru yang sudah menjadi wali kelas lain tidak
-  muncul lagi di daftar pilihan kelas lain).
+- **Penunjukan**: admin membuka **Kelola Kelas** → kolom **Wali Kelas**
+  pada tabel adalah *dropdown* nama guru — penunjukan, penggantian, dan
+  pencabutan wali dilakukan langsung di kolom itu dengan *memilih* guru
+  dari daftar guru yang sudah dimasukkan (tidak perlu mengetik ulang
+  nama, dan tidak lagi lewat form Edit Kelas; form Edit Kelas hanya
+  mengubah nama kelas). Wali juga bisa ditunjuk saat menambah kelas
+  baru. Satu kelas punya paling banyak satu wali, dan satu guru menjadi
+  wali untuk paling banyak satu kelas (guru yang sudah menjadi wali
+  kelas lain tidak muncul lagi di daftar pilihan kelas lain).
 - **Kredensial otomatis**: begitu wali ditunjuk (atau diganti), sistem
   membuatkan login baru — username `wali<namakelas>` (mis. kelas `1A` →
   `wali1a`, kelas `X IPA 1` → `walixipa1`) dan **password acak** 10
   karakter. Username + password itu ditampilkan ke admin **satu kali**
-  lewat pesan di layar; sampaikan ke gurunya. Menyimpan edit kelas
-  *tanpa* mengganti wali tidak mengubah password yang berlaku.
+  lewat pesan di layar; sampaikan ke gurunya. Memilih wali yang sama
+  pada dropdown (atau menyimpan edit kelas) tidak mengubah password
+  yang berlaku.
 - **Password selalu terlihat admin**: password wali yang **sedang
   berlaku** selalu tampil di sebelah username pada tabel **Kelola
   Guru** (baris kecil `PW: ...` di bawah username + lencana wali) dan
