@@ -137,6 +137,21 @@ body.menu-kustom .logout-btn:hover { background: var(--menu-hover);
 .btn-excel:hover { background: #05603a; }
 .btn-sm { padding: 6px 12px; font-size: .88rem; border-radius: 8px; }
 .btn-block { width: 100%; justify-content: center; }
+/* Tombol aksi kecil berbentuk pil pada kolom Aksi tabel (Detail, Lihat
+   Kelas, Edit, Hapus) — tampilannya menyamai tombol utama (Cari/Simpan):
+   latar indigo, atau gradasi tema (--tema-grad) selama tema pastel aktif
+   (aturan tema di bawah), teks putih tebal, tanpa garis bawah. */
+.btn-aksi { display: inline-block; padding: 4px 14px; border: none;
+  border-radius: 999px; background: var(--indigo); color: #fff;
+  font-family: inherit; font-size: 13px; font-weight: 700; line-height: 1.5;
+  text-decoration: none; cursor: pointer; box-shadow: var(--shadow-sm);
+  transition: filter .15s ease, transform .1s ease; }
+.btn-aksi:hover { filter: brightness(1.08); }
+.btn-aksi:active { transform: scale(.97); }
+/* Wadah tombol-tombol aksi dalam satu sel: berjajar dengan jarak kecil
+   dan membungkus rapi pada layar sempit. */
+.aksi-grup { display: inline-flex; flex-wrap: wrap; gap: 6px;
+  align-items: center; }
 button { font-family: inherit; }
 form.inline { display: inline; }
 /* Dropdown wali kelas sebaris pada tabel Kelola Kelas: ringkas di dalam
@@ -302,7 +317,7 @@ table.tabel.kelola th, table.tabel.kelola td { text-align: left; }
 table.tabel.kelola th.no, table.tabel.kelola td.no { text-align: center; }
 table.tabel.kelola tbody tr:nth-child(even) { background: #fafbfe; }
 table.tabel.kelola tbody tr:hover { background: #f7f9ff; }
-table.tabel.kelola td.aksi { white-space: nowrap; }
+table.tabel.kelola td.aksi { white-space: normal; }
 /* Lencana "Wali <Kelas>" di kolom Username Kelola Guru: guru yang sedang
    menjadi wali kelas (satu-satunya guru yang punya login). */
 .wali-badge { display: inline-block; padding: 1px 8px; border-radius: 999px;
@@ -469,7 +484,25 @@ footer .lisensi { margin-top: 4px; }
    --warna-menu dan tidak memberi warna latar inline (kecuali bila
    wallpaper terpasang), jadi palet tema yang berlaku. Teks selalu
    gelap (--teks) di atas pastel agar tetap terbaca. */
-body.tema-pastel-pink { --tema-bg: #fdf2f5;
+body.tema-pastel-pink,
+jadi palet tema yang berlaku. Teks selalu
+   gelap (--teks) di atas pastel agar tetap terbaca. */
+body.tema-lemon,
+jadi palet tema yang berlaku. Teks selalu
+   gelap (--teks) di atas pastel agar tetap terbaca. */
+body.tema-melon,
+jadi palet tema yang berlaku. Teks selalu
+   gelap (--teks) di atas pastel agar tetap terbaca. */
+body.tema-senja,
+jadi palet tema yang berlaku. Teks selalu
+   gelap (--teks) di atas pastel agar tetap terbaca. */
+body.tema-matcha,
+jadi palet tema yang berlaku. Teks selalu
+   gelap (--teks) di atas pastel agar tetap terbaca. */
+body.tema-rose,
+jadi palet tema yang berlaku. Teks selalu
+   gelap (--teks) di atas pastel agar tetap terbaca. */
+body.tema-karamel { --tema-bg: #fdf2f5;
   --tema-grad: linear-gradient(135deg, #f472a0, #fb923c);
   --tema-aksen: #ec4899; --tema-aksen2: #f97316; --tema-ekstra: #a78bfa;
   --tema-menu: #fff5f8; --tema-teks-aksen: #be185d;
@@ -499,109 +532,356 @@ body.tema-krem { --tema-bg: #fff7ed;
   --tema-menu: #fffaf1; --tema-teks-aksen: #c2410c;
   --tema-tint1: #fef3c7; --tema-tint2: #ffe4e6;
   --tema-tint3: #ffedd5; --tema-tint4: #fef9c3; }
+body.tema-lemon { --tema-bg: #fefce8;
+  --tema-grad: linear-gradient(135deg, #fde047, #34d399);
+  --tema-aksen: #ca8a04; --tema-aksen2: #16a34a;
+  --tema-menu: #fffef2; --tema-teks-aksen: #a16207;
+  --tema-tint1: #fef9c3; --tema-tint2: #dcfce7;
+  --tema-tint3: #fef3c7; --tema-tint4: #ecfccb; }
+body.tema-melon { --tema-bg: #fff1e6;
+  --tema-grad: linear-gradient(135deg, #fdba74, #6ee7b7);
+  --tema-aksen: #f97316; --tema-aksen2: #059669;
+  --tema-menu: #fff8f1; --tema-teks-aksen: #9a3412;
+  --tema-tint1: #ffedd5; --tema-tint2: #d1fae5;
+  --tema-tint3: #fef3c7; --tema-tint4: #ffe4e6; }
+body.tema-senja { --tema-bg: #f0f9ff;
+  --tema-grad: linear-gradient(135deg, #38bdf8, #fb923c);
+  --tema-aksen: #0284c7; --tema-aksen2: #ea580c;
+  --tema-menu: #f5fbff; --tema-teks-aksen: #0369a1;
+  --tema-tint1: #e0f2fe; --tema-tint2: #ffedd5;
+  --tema-tint3: #dbeafe; --tema-tint4: #fef3c7; }
+body.tema-matcha { --tema-bg: #f7fee7;
+  --tema-grad: linear-gradient(135deg, #a3e635, #4ade80);
+  --tema-aksen: #65a30d; --tema-aksen2: #d97706;
+  --tema-menu: #fbfff2; --tema-teks-aksen: #4d7c0f;
+  --tema-tint1: #ecfccb; --tema-tint2: #fef3c7;
+  --tema-tint3: #dcfce7; --tema-tint4: #fef9c3; }
+body.tema-rose { --tema-bg: #fff1f2;
+  --tema-grad: linear-gradient(135deg, #fb7185, #c084fc);
+  --tema-aksen: #e11d48; --tema-aksen2: #9333ea;
+  --tema-menu: #fff7f8; --tema-teks-aksen: #be123c;
+  --tema-tint1: #ffe4e6; --tema-tint2: #f3e8ff;
+  --tema-tint3: #fce7f3; --tema-tint4: #fae8ff; }
+body.tema-karamel { --tema-bg: #fdf6ec;
+  --tema-grad: linear-gradient(135deg, #f2a950, #d97706);
+  --tema-aksen: #b45309; --tema-aksen2: #ea580c;
+  --tema-menu: #fffaf0; --tema-teks-aksen: #92400e;
+  --tema-tint1: #fef3c7; --tema-tint2: #f5e6d3;
+  --tema-tint3: #ffedd5; --tema-tint4: #fef9c3; }
 
 body.tema-pastel-pink, body.tema-mint, body.tema-langit,
-body.tema-lilac, body.tema-krem { background-color: var(--tema-bg); }
+body.tema-lilac, body.tema-krem,
+body.tema-lemon,
+body.tema-melon,
+body.tema-senja,
+body.tema-matcha,
+body.tema-rose,
+body.tema-karamel { background-color: var(--tema-bg); }
 body.tema-pastel-pink .card, body.tema-mint .card, body.tema-langit .card,
 body.tema-lilac .card, body.tema-krem .card,
 body.tema-pastel-pink .auth-card, body.tema-mint .auth-card,
 body.tema-langit .auth-card, body.tema-lilac .auth-card,
-body.tema-krem .auth-card { border-radius: 22px; border-color: transparent;
+body.tema-krem .auth-card,
+body.tema-lemon .card,
+body.tema-melon .card,
+body.tema-senja .card,
+body.tema-matcha .card,
+body.tema-rose .card,
+body.tema-karamel .card,
+body.tema-lemon .auth-card,
+body.tema-melon .auth-card,
+body.tema-senja .auth-card,
+body.tema-matcha .auth-card,
+body.tema-rose .auth-card,
+body.tema-karamel .auth-card { border-radius: 22px; border-color: transparent;
   box-shadow: 0 2px 6px rgba(76,60,120,.05), 0 16px 36px -18px rgba(76,60,120,.28); }
 body.tema-pastel-pink .btn-primary, body.tema-mint .btn-primary,
 body.tema-langit .btn-primary, body.tema-lilac .btn-primary,
-body.tema-krem .btn-primary { background: var(--tema-grad); }
+body.tema-krem .btn-primary,
+body.tema-lemon .btn-primary,
+body.tema-melon .btn-primary,
+body.tema-senja .btn-primary,
+body.tema-matcha .btn-primary,
+body.tema-rose .btn-primary,
+body.tema-karamel .btn-primary { background: var(--tema-grad); }
 body.tema-pastel-pink .btn-primary:hover, body.tema-mint .btn-primary:hover,
 body.tema-langit .btn-primary:hover, body.tema-lilac .btn-primary:hover,
-body.tema-krem .btn-primary:hover { background: var(--tema-grad);
+body.tema-krem .btn-primary:hover,
+body.tema-lemon .btn-primary:hover,
+body.tema-melon .btn-primary:hover,
+body.tema-senja .btn-primary:hover,
+body.tema-matcha .btn-primary:hover,
+body.tema-rose .btn-primary:hover,
+body.tema-karamel .btn-primary:hover { background: var(--tema-grad);
+  filter: brightness(1.06); }
+body.tema-pastel-pink .btn-aksi, body.tema-mint .btn-aksi,
+body.tema-langit .btn-aksi, body.tema-lilac .btn-aksi,
+body.tema-krem .btn-aksi,
+body.tema-lemon .btn-aksi,
+body.tema-melon .btn-aksi,
+body.tema-senja .btn-aksi,
+body.tema-matcha .btn-aksi,
+body.tema-rose .btn-aksi,
+body.tema-karamel .btn-aksi { background: var(--tema-grad); }
+body.tema-pastel-pink .btn-aksi:hover, body.tema-mint .btn-aksi:hover,
+body.tema-langit .btn-aksi:hover, body.tema-lilac .btn-aksi:hover,
+body.tema-krem .btn-aksi:hover,
+body.tema-lemon .btn-aksi:hover,
+body.tema-melon .btn-aksi:hover,
+body.tema-senja .btn-aksi:hover,
+body.tema-matcha .btn-aksi:hover,
+body.tema-rose .btn-aksi:hover,
+body.tema-karamel .btn-aksi:hover { background: var(--tema-grad);
   filter: brightness(1.06); }
 body.tema-pastel-pink .sidebar, body.tema-mint .sidebar,
 body.tema-langit .sidebar, body.tema-lilac .sidebar,
-body.tema-krem .sidebar { background: var(--tema-menu);
+body.tema-krem .sidebar,
+body.tema-lemon .sidebar,
+body.tema-melon .sidebar,
+body.tema-senja .sidebar,
+body.tema-matcha .sidebar,
+body.tema-rose .sidebar,
+body.tema-karamel .sidebar { background: var(--tema-menu);
   border-right-color: transparent; }
 body.tema-pastel-pink .topbar, body.tema-mint .topbar,
 body.tema-langit .topbar, body.tema-lilac .topbar,
-body.tema-krem .topbar { background: var(--tema-grad); }
+body.tema-krem .topbar,
+body.tema-lemon .topbar,
+body.tema-melon .topbar,
+body.tema-senja .topbar,
+body.tema-matcha .topbar,
+body.tema-rose .topbar,
+body.tema-karamel .topbar { background: var(--tema-grad); }
 body.tema-pastel-pink .bottomnav, body.tema-mint .bottomnav,
 body.tema-langit .bottomnav, body.tema-lilac .bottomnav,
-body.tema-krem .bottomnav { background: var(--tema-menu);
+body.tema-krem .bottomnav,
+body.tema-lemon .bottomnav,
+body.tema-melon .bottomnav,
+body.tema-senja .bottomnav,
+body.tema-matcha .bottomnav,
+body.tema-rose .bottomnav,
+body.tema-karamel .bottomnav { background: var(--tema-menu);
   border-top-color: transparent; }
 body.tema-pastel-pink .nav-item.aktif, body.tema-mint .nav-item.aktif,
 body.tema-langit .nav-item.aktif, body.tema-lilac .nav-item.aktif,
-body.tema-krem .nav-item.aktif { background: var(--tema-grad); color: #fff; }
+body.tema-krem .nav-item.aktif,
+body.tema-lemon .nav-item.aktif,
+body.tema-melon .nav-item.aktif,
+body.tema-senja .nav-item.aktif,
+body.tema-matcha .nav-item.aktif,
+body.tema-rose .nav-item.aktif,
+body.tema-karamel .nav-item.aktif { background: var(--tema-grad); color: #fff; }
 body.tema-pastel-pink .bnav-item.aktif, body.tema-mint .bnav-item.aktif,
 body.tema-langit .bnav-item.aktif, body.tema-lilac .bnav-item.aktif,
-body.tema-krem .bnav-item.aktif { background: var(--tema-tint1);
+body.tema-krem .bnav-item.aktif,
+body.tema-lemon .bnav-item.aktif,
+body.tema-melon .bnav-item.aktif,
+body.tema-senja .bnav-item.aktif,
+body.tema-matcha .bnav-item.aktif,
+body.tema-rose .bnav-item.aktif,
+body.tema-karamel .bnav-item.aktif { background: var(--tema-tint1);
   color: var(--tema-teks-aksen); }
 body.tema-pastel-pink .brand-mark, body.tema-mint .brand-mark,
 body.tema-langit .brand-mark, body.tema-lilac .brand-mark,
-body.tema-krem .brand-mark { background: var(--tema-grad); }
+body.tema-krem .brand-mark,
+body.tema-lemon .brand-mark,
+body.tema-melon .brand-mark,
+body.tema-senja .brand-mark,
+body.tema-matcha .brand-mark,
+body.tema-rose .brand-mark,
+body.tema-karamel .brand-mark { background: var(--tema-grad); }
 body.tema-pastel-pink .brand-mark.has-logo, body.tema-mint .brand-mark.has-logo,
 body.tema-langit .brand-mark.has-logo, body.tema-lilac .brand-mark.has-logo,
-body.tema-krem .brand-mark.has-logo { background: #fff; }
+body.tema-krem .brand-mark.has-logo,
+body.tema-lemon .brand-mark.has-logo,
+body.tema-melon .brand-mark.has-logo,
+body.tema-senja .brand-mark.has-logo,
+body.tema-matcha .brand-mark.has-logo,
+body.tema-rose .brand-mark.has-logo,
+body.tema-karamel .brand-mark.has-logo { background: #fff; }
 body.tema-pastel-pink .avatar, body.tema-mint .avatar,
 body.tema-langit .avatar, body.tema-lilac .avatar,
-body.tema-krem .avatar { background: var(--tema-grad); }
+body.tema-krem .avatar,
+body.tema-lemon .avatar,
+body.tema-melon .avatar,
+body.tema-senja .avatar,
+body.tema-matcha .avatar,
+body.tema-rose .avatar,
+body.tema-karamel .avatar { background: var(--tema-grad); }
 body.tema-pastel-pink .quick-card, body.tema-mint .quick-card,
 body.tema-langit .quick-card, body.tema-lilac .quick-card,
-body.tema-krem .quick-card { background: var(--tema-grad); }
+body.tema-krem .quick-card,
+body.tema-lemon .quick-card,
+body.tema-melon .quick-card,
+body.tema-senja .quick-card,
+body.tema-matcha .quick-card,
+body.tema-rose .quick-card,
+body.tema-karamel .quick-card { background: var(--tema-grad); }
 body.tema-pastel-pink .stat-card, body.tema-mint .stat-card,
 body.tema-langit .stat-card, body.tema-lilac .stat-card,
-body.tema-krem .stat-card { border-radius: 22px; border-color: transparent; }
+body.tema-krem .stat-card,
+body.tema-lemon .stat-card,
+body.tema-melon .stat-card,
+body.tema-senja .stat-card,
+body.tema-matcha .stat-card,
+body.tema-rose .stat-card,
+body.tema-karamel .stat-card { border-radius: 22px; border-color: transparent; }
 body.tema-pastel-pink .stat-card:nth-child(4n+1), body.tema-mint .stat-card:nth-child(4n+1),
 body.tema-langit .stat-card:nth-child(4n+1), body.tema-lilac .stat-card:nth-child(4n+1),
-body.tema-krem .stat-card:nth-child(4n+1) { background: var(--tema-tint1); }
+body.tema-krem .stat-card:nth-child(4n+1),
+body.tema-lemon .stat-card:nth-child(4n+1),
+body.tema-melon .stat-card:nth-child(4n+1),
+body.tema-senja .stat-card:nth-child(4n+1),
+body.tema-matcha .stat-card:nth-child(4n+1),
+body.tema-rose .stat-card:nth-child(4n+1),
+body.tema-karamel .stat-card:nth-child(4n+1) { background: var(--tema-tint1); }
 body.tema-pastel-pink .stat-card:nth-child(4n+2), body.tema-mint .stat-card:nth-child(4n+2),
 body.tema-langit .stat-card:nth-child(4n+2), body.tema-lilac .stat-card:nth-child(4n+2),
-body.tema-krem .stat-card:nth-child(4n+2) { background: var(--tema-tint2); }
+body.tema-krem .stat-card:nth-child(4n+2),
+body.tema-lemon .stat-card:nth-child(4n+2),
+body.tema-melon .stat-card:nth-child(4n+2),
+body.tema-senja .stat-card:nth-child(4n+2),
+body.tema-matcha .stat-card:nth-child(4n+2),
+body.tema-rose .stat-card:nth-child(4n+2),
+body.tema-karamel .stat-card:nth-child(4n+2) { background: var(--tema-tint2); }
 body.tema-pastel-pink .stat-card:nth-child(4n+3), body.tema-mint .stat-card:nth-child(4n+3),
 body.tema-langit .stat-card:nth-child(4n+3), body.tema-lilac .stat-card:nth-child(4n+3),
-body.tema-krem .stat-card:nth-child(4n+3) { background: var(--tema-tint3); }
+body.tema-krem .stat-card:nth-child(4n+3),
+body.tema-lemon .stat-card:nth-child(4n+3),
+body.tema-melon .stat-card:nth-child(4n+3),
+body.tema-senja .stat-card:nth-child(4n+3),
+body.tema-matcha .stat-card:nth-child(4n+3),
+body.tema-rose .stat-card:nth-child(4n+3),
+body.tema-karamel .stat-card:nth-child(4n+3) { background: var(--tema-tint3); }
 body.tema-pastel-pink .stat-card:nth-child(4n), body.tema-mint .stat-card:nth-child(4n),
 body.tema-langit .stat-card:nth-child(4n), body.tema-lilac .stat-card:nth-child(4n),
-body.tema-krem .stat-card:nth-child(4n) { background: var(--tema-tint4); }
+body.tema-krem .stat-card:nth-child(4n),
+body.tema-lemon .stat-card:nth-child(4n),
+body.tema-melon .stat-card:nth-child(4n),
+body.tema-senja .stat-card:nth-child(4n),
+body.tema-matcha .stat-card:nth-child(4n),
+body.tema-rose .stat-card:nth-child(4n),
+body.tema-karamel .stat-card:nth-child(4n) { background: var(--tema-tint4); }
 body.tema-pastel-pink h2, body.tema-mint h2, body.tema-langit h2,
-body.tema-lilac h2, body.tema-krem h2 { color: var(--tema-teks-aksen); }
+body.tema-lilac h2, body.tema-krem h2,
+body.tema-lemon h2,
+body.tema-melon h2,
+body.tema-senja h2,
+body.tema-matcha h2,
+body.tema-rose h2,
+body.tema-karamel h2 { color: var(--tema-teks-aksen); }
 body.tema-pastel-pink .kelas-card h3 svg, body.tema-mint .kelas-card h3 svg,
 body.tema-langit .kelas-card h3 svg, body.tema-lilac .kelas-card h3 svg,
-body.tema-krem .kelas-card h3 svg { color: var(--tema-aksen); }
+body.tema-krem .kelas-card h3 svg,
+body.tema-lemon .kelas-card h3 svg,
+body.tema-melon .kelas-card h3 svg,
+body.tema-senja .kelas-card h3 svg,
+body.tema-matcha .kelas-card h3 svg,
+body.tema-rose .kelas-card h3 svg,
+body.tema-karamel .kelas-card h3 svg { color: var(--tema-aksen); }
 body.tema-pastel-pink .kelas-bar > span, body.tema-mint .kelas-bar > span,
 body.tema-langit .kelas-bar > span, body.tema-lilac .kelas-bar > span,
-body.tema-krem .kelas-bar > span { background: var(--tema-grad); }
+body.tema-krem .kelas-bar > span,
+body.tema-lemon .kelas-bar > span,
+body.tema-melon .kelas-bar > span,
+body.tema-senja .kelas-bar > span,
+body.tema-matcha .kelas-bar > span,
+body.tema-rose .kelas-bar > span,
+body.tema-karamel .kelas-bar > span { background: var(--tema-grad); }
 body.tema-pastel-pink .userchip, body.tema-mint .userchip,
 body.tema-langit .userchip, body.tema-lilac .userchip,
-body.tema-krem .userchip { background: var(--tema-tint1);
+body.tema-krem .userchip,
+body.tema-lemon .userchip,
+body.tema-melon .userchip,
+body.tema-senja .userchip,
+body.tema-matcha .userchip,
+body.tema-rose .userchip,
+body.tema-karamel .userchip { background: var(--tema-tint1);
   border-color: transparent; }
 body.tema-pastel-pink .menu-card svg, body.tema-mint .menu-card svg,
 body.tema-langit .menu-card svg, body.tema-lilac .menu-card svg,
-body.tema-krem .menu-card svg { color: var(--tema-aksen); }
+body.tema-krem .menu-card svg,
+body.tema-lemon .menu-card svg,
+body.tema-melon .menu-card svg,
+body.tema-senja .menu-card svg,
+body.tema-matcha .menu-card svg,
+body.tema-rose .menu-card svg,
+body.tema-karamel .menu-card svg { color: var(--tema-aksen); }
 body.tema-pastel-pink .laporan-klik, body.tema-mint .laporan-klik,
 body.tema-langit .laporan-klik, body.tema-lilac .laporan-klik,
-body.tema-krem .laporan-klik { color: var(--tema-teks-aksen); }
+body.tema-krem .laporan-klik,
+body.tema-lemon .laporan-klik,
+body.tema-melon .laporan-klik,
+body.tema-senja .laporan-klik,
+body.tema-matcha .laporan-klik,
+body.tema-rose .laporan-klik,
+body.tema-karamel .laporan-klik { color: var(--tema-teks-aksen); }
 body.tema-pastel-pink .laporan-card:hover, body.tema-mint .laporan-card:hover,
 body.tema-langit .laporan-card:hover, body.tema-lilac .laporan-card:hover,
-body.tema-krem .laporan-card:hover { border-color: var(--tema-aksen); }
+body.tema-krem .laporan-card:hover,
+body.tema-lemon .laporan-card:hover,
+body.tema-melon .laporan-card:hover,
+body.tema-senja .laporan-card:hover,
+body.tema-matcha .laporan-card:hover,
+body.tema-rose .laporan-card:hover,
+body.tema-karamel .laporan-card:hover { border-color: var(--tema-aksen); }
 body.tema-pastel-pink table.tabel thead th, body.tema-mint table.tabel thead th,
 body.tema-langit table.tabel thead th, body.tema-lilac table.tabel thead th,
-body.tema-krem table.tabel thead th { background: var(--tema-tint1);
+body.tema-krem table.tabel thead th,
+body.tema-lemon table.tabel thead th,
+body.tema-melon table.tabel thead th,
+body.tema-senja table.tabel thead th,
+body.tema-matcha table.tabel thead th,
+body.tema-rose table.tabel thead th,
+body.tema-karamel table.tabel thead th { background: var(--tema-tint1);
   color: var(--teks); }
 body.tema-pastel-pink table.tabel tr.total-row td,
 body.tema-mint table.tabel tr.total-row td,
 body.tema-langit table.tabel tr.total-row td,
 body.tema-lilac table.tabel tr.total-row td,
-body.tema-krem table.tabel tr.total-row td { background: var(--tema-tint1); }
+body.tema-krem table.tabel tr.total-row td,
+body.tema-lemon table.tabel tr.total-row td,
+body.tema-melon table.tabel tr.total-row td,
+body.tema-senja table.tabel tr.total-row td,
+body.tema-matcha table.tabel tr.total-row td,
+body.tema-rose table.tabel tr.total-row td,
+body.tema-karamel table.tabel tr.total-row td { background: var(--tema-tint1); }
 body.tema-pastel-pink input:focus, body.tema-mint input:focus,
 body.tema-langit input:focus, body.tema-lilac input:focus,
 body.tema-krem input:focus, body.tema-pastel-pink select:focus,
 body.tema-mint select:focus, body.tema-langit select:focus,
-body.tema-lilac select:focus, body.tema-krem select:focus {
+body.tema-lilac select:focus, body.tema-krem select:focus,
+body.tema-lemon input:focus,
+body.tema-melon input:focus,
+body.tema-senja input:focus,
+body.tema-matcha input:focus,
+body.tema-rose input:focus,
+body.tema-karamel input:focus,
+body.tema-lemon select:focus,
+body.tema-melon select:focus,
+body.tema-senja select:focus,
+body.tema-matcha select:focus,
+body.tema-rose select:focus,
+body.tema-karamel select:focus {
   border-color: var(--tema-aksen); box-shadow: 0 0 0 3px var(--tema-tint1); }
 body.tema-pastel-pink .swatch input[type="radio"]:checked + span,
 body.tema-mint .swatch input[type="radio"]:checked + span,
 body.tema-langit .swatch input[type="radio"]:checked + span,
 body.tema-lilac .swatch input[type="radio"]:checked + span,
-body.tema-krem .swatch input[type="radio"]:checked + span {
+body.tema-krem .swatch input[type="radio"]:checked + span,
+body.tema-lemon .swatch input[type="radio"]:checked + span,
+body.tema-melon .swatch input[type="radio"]:checked + span,
+body.tema-senja .swatch input[type="radio"]:checked + span,
+body.tema-matcha .swatch input[type="radio"]:checked + span,
+body.tema-rose .swatch input[type="radio"]:checked + span,
+body.tema-karamel .swatch input[type="radio"]:checked + span {
   border-color: var(--tema-aksen); box-shadow: 0 0 0 3px var(--tema-tint1); }
 body.tema-pastel-pink .kartu, body.tema-mint .kartu,
 body.tema-langit .kartu, body.tema-lilac .kartu,
-body.tema-krem .kartu { border-color: var(--tema-aksen); }
+body.tema-krem .kartu,
+body.tema-lemon .kartu,
+body.tema-melon .kartu,
+body.tema-senja .kartu,
+body.tema-matcha .kartu,
+body.tema-rose .kartu,
+body.tema-karamel .kartu { border-color: var(--tema-aksen); }
