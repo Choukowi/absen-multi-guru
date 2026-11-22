@@ -123,7 +123,10 @@ CREATE TABLE IF NOT EXISTS users (
     nama TEXT NOT NULL,
     aktif INTEGER NOT NULL DEFAULT 1,
     mapel TEXT DEFAULT '',
-    kode_qr TEXT
+    kode_qr TEXT,
+    pass_sementara TEXT DEFAULT ''  -- password guru (wali) yang SEDANG berlaku,
+                                    -- teks biasa KHUSUS tampilan admin di Kelola
+                                    -- Guru; login tetap diperiksa via hash PBKDF2
 );
 CREATE TABLE IF NOT EXISTS classes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,8 +202,11 @@ def slug_kelas(nama):
 
 def password_acak(n=10):
     """Password acak huruf+angka (modul secrets) untuk login wali kelas.
-    Ditampilkan ke admin SATU kali lewat pesan flash, lalu hanya hash-nya
-    yang tersimpan."""
+    Ditampilkan ke admin lewat pesan flash dan disimpan juga sebagai teks
+    biasa di users.pass_sementara supaya admin selalu bisa melihat
+    password wali yang sedang berlaku di sebelah username pada Kelola
+    Guru (permintaan admin sekolah). Pemeriksaan login tetap hanya
+    memakai hash PBKDF2 — pass_sementara murni kolom tampilan."""
     abjad = string.ascii_letters + string.digits
     return "".join(secrets.choice(abjad) for _ in range(n))
 
@@ -229,6 +235,8 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN mapel TEXT DEFAULT ''")
     if "kode_qr" not in kolom_users:
         conn.execute("ALTER TABLE users ADD COLUMN kode_qr TEXT")
+    if "pass_sementara" not in kolom_users:
+        conn.execute("ALTER TABLE users ADD COLUMN pass_sementara TEXT DEFAULT ''")
     # Model "login hanya wali kelas": classes.wali_id menunjuk guru (users.id)
     # yang menjadi wali kelas itu. NULL = belum ada wali (guru belum bisa login).
     kolom_kelas = {r["name"] for r in conn.execute("PRAGMA table_info(classes)")}
@@ -784,8 +792,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/ganti-password":
             ph, salt = hash_password(f["password"])
             conn = db()
-            conn.execute("UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                         (ph, salt, user["id"]))
+            if user["role"] == "guru":
+                # Password guru (wali kelas) yang berlaku ikut disimpan
+                # sebagai teks biasa di pass_sementara, agar tampilan
+                # "PW: ..." di sebelah username pada Kelola Guru SELALU
+                # sinkron — termasuk sesudah wali mengganti passwordnya
+                # sendiri (permintaan admin sekolah). Untuk akun ADMIN
+                # tidak disimpan apa pun di kolom tampilan itu.
+                conn.execute("UPDATE users SET password_hash=?, salt=?, "
+                             "pass_sementara=? WHERE id=?",
+                             (ph, salt, f["password"], user["id"]))
+            else:
+                conn.execute("UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                             (ph, salt, user["id"]))
             conn.commit(); conn.close()
             return self.redirect("/dashboard", "Password berhasil diganti.")
         if path == "/api/scan":
@@ -2262,9 +2281,15 @@ def _admin_guru(self, user, flash):
     for i, r in enumerate(rows):
         nama_js = js_str(r["nama"])
         if r["wali_kelas_nama"]:
-            # Guru yang sedang jadi wali: username loginnya + lencana kelas.
+            # Guru yang sedang jadi wali: username loginnya + lencana kelas
+            # + password yang SEDANG berlaku (pass_sementara, selalu
+            # sinkron: terbitan admin maupun hasil ganti sendiri oleh
+            # wali). Kosong hanya untuk wali warisan dari sebelum fitur
+            # ini ada — tampilkan "—" sampai admin menerbitkan yang baru.
+            pw_tampil = esc(r["pass_sementara"]) if r["pass_sementara"] else "&mdash;"
             sel_user = (f'<td><code>{esc(r["username"])}</code> '
-                        f'<span class="wali-badge">Wali {esc(r["wali_kelas_nama"])}</span></td>')
+                        f'<span class="wali-badge">Wali {esc(r["wali_kelas_nama"])}</span>'
+                        f'<br><small class="muted">PW: {pw_tampil}</small></td>')
         else:
             # Bukan wali: belum punya login (login lahir dari penunjukan wali).
             sel_user = '<td>&mdash;</td>'
@@ -2340,13 +2365,17 @@ def _admin_guru_edit(self, user, gid, flash):
     if not g:
         return self.redirect("/admin/guru", "Guru tidak ditemukan.")
     if wali_row:
+        pw_tampil = esc(g["pass_sementara"]) if g["pass_sementara"] else "&mdash;"
         blok_login = f"""
     <div class="card form-card"><h3>Login Wali Kelas</h3>
       <label>Username <input value="{esc(g['username'])}" readonly disabled></label>
+      <p class="muted"><small>PW: {pw_tampil} — password yang sedang
+      berlaku untuk login wali ini; selalu diperbarui, termasuk bila
+      wali menggantinya sendiri.</small></p>
       <p class="muted"><small>Guru ini adalah wali kelas
       <b>{esc(wali_row['nama'])}</b>. Username dibuat otomatis dari nama
-      kelas dan tidak bisa diubah. Bila passwordnya lupa, buat password
-      baru — password acak ditampilkan satu kali.</small></p>
+      kelas dan tidak bisa diubah. Bila perlu mengganti passwordnya,
+      buat password baru lewat tombol di bawah.</small></p>
       <form method="post" action="/admin/guru/{g['id']}/password-baru">
         <button type="submit" class="btn btn-primary">Buat Password Baru</button></form></div>"""
     else:
@@ -2398,8 +2427,8 @@ def _post_admin_guru_password_baru(self, gid):
                              "hanya untuk wali kelas.")
     pw = password_acak()
     ph, salt = hash_password(pw)
-    conn.execute("UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                 (ph, salt, gid))
+    conn.execute("UPDATE users SET password_hash=?, salt=?, pass_sementara=? "
+                 "WHERE id=?", (ph, salt, pw, gid))
     conn.commit(); conn.close()
     return self.redirect(
         "/admin/guru",
@@ -2545,17 +2574,19 @@ def _tetapkan_wali(self, conn, kelas, wali_baru):
     id, nama, wali_id LAMA). Bila walinya BERUBAH:
     - wali lama: username diparkir ke "guru-<id>" (membebaskan nama
       wali<slug>) — loginnya mati juga oleh penjaga wali di setiap login
-      & permintaan;
+      & permintaan — dan pass_sementara dikosongkan (tidak ada lagi
+      password yang perlu ditampilkan untuknya);
     - wali baru: username := "wali" + slug(nama kelas) (bila bentrok
       dengan pengguna lain, tambah id kelas), password := acak 10
-      karakter, dan pesan flash kredensial dikembalikan untuk
-      ditampilkan ke admin SATU kali.
+      karakter (hash-nya untuk login, teks biasanya ke pass_sementara
+      untuk tampilan admin), dan pesan flash kredensial dikembalikan
+      untuk ditampilkan ke admin SATU kali.
     Wali TIDAK berubah -> tidak menyentuh apa pun, kembalikan None."""
     lama = kelas["wali_id"]
     if lama == wali_baru:
         return None
     if lama:
-        conn.execute("UPDATE users SET username=? WHERE id=?",
+        conn.execute("UPDATE users SET username=?, pass_sementara='' WHERE id=?",
                      (f"guru-{lama}", lama))
     if not wali_baru:
         conn.execute("UPDATE classes SET wali_id=NULL WHERE id=?",
@@ -2571,8 +2602,9 @@ def _tetapkan_wali(self, conn, kelas, wali_baru):
         uname = f"{uname}{kelas['id']}"
     pw = password_acak()
     ph, salt = hash_password(pw)
-    conn.execute("UPDATE users SET username=?, password_hash=?, salt=? WHERE id=?",
-                 (uname, ph, salt, wali_baru))
+    conn.execute("UPDATE users SET username=?, password_hash=?, salt=?, "
+                 "pass_sementara=? WHERE id=?",
+                 (uname, ph, salt, pw, wali_baru))
     conn.execute("UPDATE classes SET wali_id=? WHERE id=?",
                  (wali_baru, kelas["id"]))
     return (f"Wali kelas {kelas['nama']}: {g['nama']} — username {uname}, "
@@ -2748,6 +2780,12 @@ def _post_admin_kelas_hapus(self, kid):
             "Kelas tidak bisa dihapus karena masih dipakai (ada siswa). "
             "Hapus atau pindahkan dulu siswa di kelas ini.")
     try:
+        if row["wali_id"]:
+            # Kelas terhapus = penugasan walinya ikut berakhir: kosongkan
+            # password tampilan walinya (loginnya mati oleh penjaga wali
+            # karena kelasnya sudah tidak ada).
+            conn.execute("UPDATE users SET pass_sementara='' WHERE id=?",
+                         (row["wali_id"],))
         conn.execute("DELETE FROM classes WHERE id=?", (kid,))
         conn.commit()
     except sqlite3.IntegrityError:

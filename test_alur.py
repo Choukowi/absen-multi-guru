@@ -2861,6 +2861,192 @@ must(urllib.parse.urlparse(url).path == "/login"
      "AE: tanpa wali: POST /login-wali selalu gagal generik")
 os.remove(DBPILIH)
 
+# ===========================================================================
+# Fase AF — PASSWORD WALI SELALU TERLIHAT ADMIN DI SEBELAH USERNAME
+# (permintaan user: "password wali kelas buat di sebelah username aja",
+# lalu ditegaskan: "ketika wali kelas ubah passwordnya, yg di sebelah
+# username jga berubah sesuai password yg di ubah wali kelas").
+# Password guru yang SEDANG berlaku disimpan teks biasa di
+# users.pass_sementara KHUSUS sebagai kolom tampilan admin: diisi saat
+# penunjukan wali (password acak), saat admin menekan "Buat Password
+# Baru", dan saat wali mengganti passwordnya sendiri lewat
+# /ganti-password (hanya akun guru; password admin tidak pernah
+# disimpan di situ). Tabel Kelola Guru menampilkan "PW: <password>"
+# di bawah username + lencana wali, selalu sinkron; halaman Edit Guru
+# menampilkan info yang sama di dekat username. Penugasan
+# dicabut/diganti -> nilai dikosongkan & baris PW hilang; guru bukan
+# wali tetap "—" tanpa baris PW. Hash PBKDF2 tetap satu-satunya dasar
+# pemeriksaan login, dan nilai tampilan ini ikut tersimpan & pulih
+# lewat Backup & Pulihkan.
+# ===========================================================================
+start_server()  # kembali ke DB scratch utama (DBUJI)
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-PW"})
+s, url, form_siswa_af = req(admin, "/admin/siswa")
+kpw_id = opt_val(form_siswa_af, "UJI-Kelas-PW")
+must(kpw_id, "AF: kelas UJI-Kelas-PW dibuat")
+req(admin, "/admin/guru", {"nama": "Guru PW Satu", "mapel": "UJI-PWMapel"})
+req(admin, "/admin/guru", {"nama": "Guru PW Bebas", "mapel": "UJI-PWMapel"})
+s, url, daftar_guru_af = req(admin, "/admin/guru")
+gpw = id_dari_daftar(daftar_guru_af, "/admin/guru", "<b>Guru PW Satu</b>")
+gpb = id_dari_daftar(daftar_guru_af, "/admin/guru", "<b>Guru PW Bebas</b>")
+must(gpw and gpb, "AF: id kedua guru terbaca dari daftar")
+
+# --- guru baru (belum wali): tanpa baris PW, kolom tampilan kosong ---
+chunk_bebas = next((c for c in daftar_guru_af.split("<tr>")
+                    if "<b>Guru PW Bebas</b>" in c), "")
+must("<td>&mdash;</td>" in chunk_bebas and "PW:" not in chunk_bebas,
+     "AF: guru bukan wali: sel Username tetap '—' tanpa baris PW")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == "",
+     "AF: guru baru: pass_sementara kosong di DB")
+
+# --- penunjukan: password flash tampil juga sebagai "PW: ..." ---
+s, url, hasil = req(admin, f"/admin/kelas/{kpw_id}/edit",
+                    {"nama": "UJI-Kelas-PW", "wali_id": str(gpw)})
+m_af = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
+must(m_af is not None, "AF: penunjukan menerbitkan kredensial (flash tetap ada)")
+pw_af1 = m_af.group(2)
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == pw_af1,
+     "AF: DB: pass_sementara = password dari flash penunjukan")
+s, url, daftar_guru_af = req(admin, "/admin/guru")
+chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
+                 if "<b>Guru PW Satu</b>" in c), "")
+must(f"PW: {pw_af1}" in chunk_pw,
+     "AF: Kelola Guru menampilkan 'PW: <password flash>' di sebelah username")
+s, url, edit_pw = req(admin, f"/admin/guru/{gpw}/edit")
+must(f"PW: {pw_af1}" in edit_pw,
+     "AF: halaman Edit Guru menampilkan PW yang sama di dekat username")
+
+# --- "Buat Password Baru": tampilan ikut berganti, yang lama hilang ---
+s, url, hasil = req(admin, f"/admin/guru/{gpw}/password-baru", {})
+m_af2 = re.search(r"Password baru untuk .*: (\S+) \(sampaikan", hasil)
+must(m_af2 is not None,
+     "AF: 'Buat Password Baru' menerbitkan password (flash tetap ada)")
+pw_af2 = m_af2.group(1)
+must(pw_af2 != pw_af1, "AF: password baru berbeda dari sebelumnya")
+s, url, daftar_guru_af = req(admin, "/admin/guru")
+chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
+                 if "<b>Guru PW Satu</b>" in c), "")
+must(f"PW: {pw_af2}" in chunk_pw and pw_af1 not in chunk_pw,
+     "AF: sesudah 'Buat Password Baru', tampilan PW = password BARU (lama hilang)")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == pw_af2,
+     "AF: DB: pass_sementara diperbarui oleh 'Buat Password Baru'")
+
+# --- wali ganti password SENDIRI: tampilan ikut password pilihannya ---
+wali_af = client()
+s, url, hal = req(wali_af, "/login-wali",
+                  {"kelas_id": str(kpw_id), "password": pw_af2})
+must("dashboard" in url, "AF: wali login lewat pilih kelas dengan password terakhir")
+s, url, hal = req(wali_af, "/ganti-password", {"password": "PilihanWali#9"})
+must("Password berhasil diganti." in hal,
+     "AF: wali mengganti passwordnya sendiri lewat Ganti Password")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == "PilihanWali#9",
+     "AF: DB: pass_sementara kini = password PILIHAN wali sendiri")
+s, url, daftar_guru_af = req(admin, "/admin/guru")
+chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
+                 if "<b>Guru PW Satu</b>" in c), "")
+must("PW: PilihanWali#9" in chunk_pw and pw_af2 not in chunk_pw,
+     "AF: Kelola Guru menampilkan password BARU pilihan wali (yang lama hilang)")
+s, url, edit_pw = req(admin, f"/admin/guru/{gpw}/edit")
+must("PW: PilihanWali#9" in edit_pw,
+     "AF: halaman Edit Guru ikut menampilkan password pilihan wali")
+# password pilihan wali bisa login; password terbitan admin sudah mati
+wali_af2 = client()
+s, url, hal = req(wali_af2, "/login-wali",
+                  {"kelas_id": str(kpw_id), "password": "PilihanWali#9"})
+must("dashboard" in url,
+     "AF: login /login-wali dengan password pilihan wali berhasil")
+s, url, hal = req(client(), "/login-wali",
+                  {"kelas_id": str(kpw_id), "password": pw_af2})
+must(urllib.parse.urlparse(url).path == "/login"
+     and "Kelas atau password salah." in hal,
+     "AF: password terbitan admin mati sesudah wali mengganti password")
+
+# --- ganti password ADMIN tidak menyimpan apa pun di kolom tampilan ---
+admin_id_af = dbq("SELECT id FROM users WHERE role='admin'")
+s, url, hal = req(admin, "/ganti-password", {"password": "AdminPilihan#7"})
+must("Password berhasil diganti." in hal, "AF: admin mengganti passwordnya sendiri")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (admin_id_af,)) == "",
+     "AF: pass_sementara ADMIN tetap kosong (password admin tidak disimpan)")
+admin, url, _ = login("admin", "AdminPilihan#7")
+must("dashboard" in url, "AF: admin login lagi dengan password barunya")
+s, url, hal = req(admin, "/ganti-password", {"password": "admin123"})
+must("Password berhasil diganti." in hal,
+     "AF: password admin dikembalikan ke semula untuk fase berikutnya")
+admin, url, _ = login("admin", "admin123")
+must("dashboard" in url, "AF: admin kembali memakai password awal")
+
+# --- Backup & Pulihkan mempertahankan password tampilan ---
+s, url, hasil = req(admin, f"/admin/guru/{gpw}/password-baru", {})
+m_af3 = re.search(r"Password baru untuk .*: (\S+) \(sampaikan", hasil)
+must(m_af3 is not None, "AF: password baru diterbitkan lagi untuk uji backup")
+pw_af3 = m_af3.group(1)
+st, hdr, zipdata_af = req_bytes(admin, "/admin/backup/unduh")
+zf_af = zipfile.ZipFile(io.BytesIO(zipdata_af))
+DBAF = "/tmp/absen-uji-af.db"
+with open(DBAF, "wb") as fh:
+    fh.write(zf_af.read("absen.db"))
+must(dbqf(DBAF, "SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == pw_af3,
+     "AF: backup (ZIP) memuat pass_sementara di DB")
+os.remove(DBAF)
+DBPULIH_AF = "/tmp/absen-pulih-pw.db"
+if os.path.exists(DBPULIH_AF):
+    os.remove(DBPULIH_AF)
+start_server(dbfile=DBPULIH_AF)
+admin_af, url, _ = login("admin", "admin123")
+must("dashboard" in url, "AF: DB kosong untuk pulih: login admin awal berhasil")
+s, url, hasil = unggah(admin_af, "/admin/backup/pulihkan", "berkas",
+                       "backup-pw.zip", zipdata_af, "application/zip")
+must("Backup dipulihkan. Silakan masuk lagi." in hasil,
+     "AF: pulihkan backup berisi pass_sementara berhasil")
+admin_af, url, _ = login("admin", "admin123")
+s, url, daftar_guru_af2 = req(admin_af, "/admin/guru")
+chunk_pw2 = next((c for c in daftar_guru_af2.split("<tr>")
+                  if "<b>Guru PW Satu</b>" in c), "")
+must(f"PW: {pw_af3}" in chunk_pw2,
+     "AF: sesudah pulih, Kelola Guru tetap menampilkan PW yang sama")
+wali_af3 = client()
+s, url, hal = req(wali_af3, "/login-wali",
+                  {"kelas_id": str(kpw_id), "password": pw_af3})
+must("dashboard" in url,
+     "AF: sesudah pulih, wali login dengan password tampilan yang sama")
+os.remove(DBPULIH_AF)
+
+# --- penugasan dicabut: baris PW hilang & nilai dibersihkan ---
+start_server()  # kembali ke DB scratch utama (DBUJI)
+admin, url, _ = login("admin", "admin123")
+s, url, hasil = req(admin, f"/admin/kelas/{kpw_id}/edit",
+                    {"nama": "UJI-Kelas-PW", "wali_id": "0"})
+must("dicabut" in hasil, "AF: penugasan wali UJI-Kelas-PW dicabut")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == "",
+     "AF: DB: pass_sementara dibersihkan saat penugasan dicabut")
+s, url, daftar_guru_af = req(admin, "/admin/guru")
+chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
+                 if "<b>Guru PW Satu</b>" in c), "")
+must("<td>&mdash;</td>" in chunk_pw and "PW:" not in chunk_pw,
+     "AF: sesudah dicabut, baris PW hilang (kembali '—' seperti guru biasa)")
+
+# --- kelas dihapus: penugasan berakhir, password tampilan dibersihkan ---
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-PW2"})
+s, url, form_siswa_af = req(admin, "/admin/siswa")
+kpw2_id = opt_val(form_siswa_af, "UJI-Kelas-PW2")
+must(kpw2_id, "AF: kelas UJI-Kelas-PW2 dibuat")
+s, url, hasil = req(admin, f"/admin/kelas/{kpw2_id}/edit",
+                    {"nama": "UJI-Kelas-PW2", "wali_id": str(gpb)})
+m_af4 = re.search(r"password sementara: (\S+)", hasil)
+must(m_af4 is not None, "AF: Guru PW Bebas ditunjuk wali UJI-Kelas-PW2")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpb,)) == m_af4.group(1),
+     "AF: DB: pass_sementara Guru PW Bebas terisi sesudah penunjukan")
+s, url, hasil = req(admin, f"/admin/kelas/{kpw2_id}/hapus", {})
+must("Kelas dihapus." in hasil, "AF: kelas UJI-Kelas-PW2 (tanpa siswa) dihapus")
+must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpb,)) == "",
+     "AF: DB: pass_sementara dibersihkan saat kelas walinya dihapus")
+s, url, daftar_guru_af = req(admin, "/admin/guru")
+chunk_bebas = next((c for c in daftar_guru_af.split("<tr>")
+                    if "<b>Guru PW Bebas</b>" in c), "")
+must("PW:" not in chunk_bebas,
+     "AF: sesudah kelasnya dihapus, Guru PW Bebas tanpa baris PW lagi")
+
 stop_server()
 if os.path.exists(DBUJI):
     os.remove(DBUJI)

@@ -114,6 +114,23 @@ Hanya **wali kelas** yang bisa login sebagai guru. Modelnya:
   karakter. Username + password itu ditampilkan ke admin **satu kali**
   lewat pesan di layar; sampaikan ke gurunya. Menyimpan edit kelas
   *tanpa* mengganti wali tidak mengubah password yang berlaku.
+- **Password selalu terlihat admin**: password wali yang **sedang
+  berlaku** selalu tampil di sebelah username pada tabel **Kelola
+  Guru** (baris kecil `PW: ...` di bawah username + lencana wali) dan
+  juga pada halaman **Edit Guru** wali yang bersangkutan. Tampilan itu
+  **selalu sinkron**: terisi saat penunjukan, berubah saat admin
+  menekan **Buat Password Baru**, dan ikut berubah saat **wali
+  mengganti passwordnya sendiri** — jadi admin tidak pernah kehilangan
+  jejak password wali yang berlaku. Ini disengaja atas permintaan
+  admin sekolah. Konsekuensinya, password yang berlaku disimpan dalam
+  bentuk yang bisa dibaca (kolom `users.pass_sementara`) khusus untuk
+  fitur tampilan ini; pemeriksaan login tetap hanya memakai hash
+  PBKDF2 seperti biasa. **Karena itu file Backup & Pulihkan ikut
+  memuat password wali yang terbaca — perlakukan file backup sebagai
+  data sensitif** (simpan di tempat aman, jangan dibagikan). Password
+  akun admin sendiri tidak pernah disimpan seperti ini. Begitu
+  penugasan wali dicabut atau diganti guru lain, nilai tampilan guru
+  lama dikosongkan dan baris `PW:` hilang dari daftar.
 - **Cara login wali**: halaman login punya dua kartu — **Login Admin**
   (username + password) dan **Login Wali Kelas**. Wali *tidak* perlu
   mengetik username: ia cukup **memilih kelasnya** pada kartu Login
@@ -122,9 +139,12 @@ Hanya **wali kelas** yang bisa login sebagai guru. Modelnya:
   itu menampilkan catatan "Belum ada wali kelas yang ditunjuk admin."
   Username `wali<namakelas>` tetap bisa dipakai pada kartu Login Admin
   sebagai cadangan.
-- **Lupa password**: admin membuka Edit guru yang bersangkutan →
-  tombol **Buat Password Baru** menerbitkan password acak baru
-  (ditampilkan satu kali; password lama langsung mati).
+- **Lupa password**: admin cukup melihat baris `PW: ...` di sebelah
+  username guru itu pada **Kelola Guru** (atau halaman Edit Guru-nya)
+  — itulah password yang sedang berlaku. Bila tetap perlu diganti,
+  tombol **Buat Password Baru** pada Edit Guru menerbitkan password
+  acak baru (ditampilkan satu kali lewat pesan di layar dan langsung
+  menjadi nilai `PW:` yang tampil; password lama langsung mati).
 - **Diganti/dicabut**: wali lama langsung kehilangan login (username-nya
   diparkir dan penjaga login menolak guru yang bukan wali). Sesi wali
   yang sedang aktif pun langsung berakhir pada permintaan berikutnya.
