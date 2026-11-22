@@ -204,7 +204,7 @@ def password_acak(n=10):
     """Password acak huruf+angka (modul secrets) untuk login wali kelas.
     Ditampilkan ke admin lewat pesan flash dan disimpan juga sebagai teks
     biasa di users.pass_sementara supaya admin selalu bisa melihat
-    password wali yang sedang berlaku di sebelah username pada Kelola
+    password wali yang sedang berlaku pada kolom Password di Kelola
     Guru (permintaan admin sekolah). Pemeriksaan login tetap hanya
     memakai hash PBKDF2 — pass_sementara murni kolom tampilan."""
     abjad = string.ascii_letters + string.digits
@@ -817,7 +817,7 @@ class Handler(BaseHTTPRequestHandler):
             if user["role"] == "guru":
                 # Password guru (wali kelas) yang berlaku ikut disimpan
                 # sebagai teks biasa di pass_sementara, agar tampilan
-                # "PW: ..." di sebelah username pada Kelola Guru SELALU
+                # password pada kolom Password di Kelola Guru SELALU
                 # sinkron — termasuk sesudah wali mengganti passwordnya
                 # sendiri (permintaan admin sekolah). Untuk akun ADMIN
                 # tidak disimpan apa pun di kolom tampilan itu.
@@ -2485,15 +2485,17 @@ def _admin_guru(self, user, flash):
     for i, r in enumerate(rows):
         nama_js = js_str(r["nama"])
         if r["wali_kelas_nama"]:
-            # Guru yang sedang jadi wali: username loginnya + lencana kelas
-            # + password yang SEDANG berlaku (pass_sementara, selalu
+            # Guru yang sedang jadi wali: kolom Password menampilkan
+            # HANYA password yang SEDANG berlaku (pass_sementara, selalu
             # sinkron: terbitan admin maupun hasil ganti sendiri oleh
-            # wali). Kosong hanya untuk wali warisan dari sebelum fitur
-            # ini ada — tampilkan "—" sampai admin menerbitkan yang baru.
-            pw_tampil = esc(r["pass_sementara"]) if r["pass_sementara"] else "&mdash;"
-            sel_user = (f'<td><code>{esc(r["username"])}</code> '
-                        f'<span class="wali-badge">Wali {esc(r["wali_kelas_nama"])}</span>'
-                        f'<br><small class="muted">PW: {pw_tampil}</small></td>')
+            # wali) — tanpa username dan tanpa lencana wali (permintaan
+            # user: kolom Username diganti kolom Password). Kosong hanya
+            # untuk wali warisan dari sebelum fitur ini ada — tampilkan
+            # "—" sampai admin menerbitkan yang baru.
+            if r["pass_sementara"]:
+                sel_user = f'<td><code>{esc(r["pass_sementara"])}</code></td>'
+            else:
+                sel_user = '<td>&mdash;</td>'
         else:
             # Bukan wali: belum punya login (login lahir dari penunjukan wali).
             sel_user = '<td>&mdash;</td>'
@@ -2525,7 +2527,7 @@ def _admin_guru(self, user, flash):
     body = f"""<h2>Kelola Guru</h2>
     <div class="card table-card"><div class="table-scroll">
     <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
-    <th>Mapel</th><th>Username</th><th>Kode QR</th><th>Aksi</th></tr></thead>
+    <th>Mapel</th><th>Password</th><th>Kode QR</th><th>Aksi</th></tr></thead>
     <tbody>{items}</tbody></table></div></div>
     <div class="card form-card"><h3>Tambah Guru</h3>
     <form method="post" action="/admin/guru">

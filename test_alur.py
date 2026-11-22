@@ -2298,7 +2298,7 @@ s, url, hal_guru = req(admin, "/admin/guru")
 must('<table class="tabel kelola">' in hal_guru,
      "Kelola Guru: daftar kini berupa tabel")
 for kepala in ('<th class="no">No</th>', '<th class="nama">Nama</th>',
-               '<th>Mapel</th>', '<th>Username</th>', '<th>Kode QR</th>',
+               '<th>Mapel</th>', '<th>Password</th>', '<th>Kode QR</th>',
                '<th>Aksi</th>'):
     must(kepala in hal_guru, f"Kelola Guru: kepala kolom {kepala} tampil")
 s, url, hal_kelas = req(admin, "/admin/kelas")
@@ -2537,11 +2537,12 @@ must("Guru Wali Satu" in chunk_kw,
      "AD: kolom Wali Kelas kini memuat nama walinya")
 s, url, daftar_guru_ad = req(admin, "/admin/guru")
 chunk_gw1 = next((c for c in daftar_guru_ad.split("<tr>") if "<b>Guru Wali Satu</b>" in c), "")
-must("waliujikelaswali" in chunk_gw1 and "Wali UJI-Kelas-Wali" in chunk_gw1,
-     "AD: Kelola Guru: wali tampil username + lencana 'Wali UJI-Kelas-Wali'")
+must(f"<code>{pw_ad1}</code>" in chunk_gw1
+     and "waliujikelaswali" not in chunk_gw1 and "wali-badge" not in chunk_gw1,
+     "AD: Kelola Guru: baris wali hanya menampilkan password di kolom Password")
 chunk_gb = next((c for c in daftar_guru_ad.split("<tr>") if "<b>Guru Bebas</b>" in c), "")
 must("<td>&mdash;</td>" in chunk_gb,
-     "AD: Kelola Guru: guru bukan wali tampil '—' di kolom Username")
+     "AD: Kelola Guru: guru bukan wali tampil '—' di kolom Password")
 
 # --- login wali & navigasi terbatas ---
 wali, url, _ = login("waliujikelaswali", pw_ad1)
@@ -2885,9 +2886,10 @@ os.remove(DBPILIH)
 # penunjukan wali (password acak), saat admin menekan "Buat Password
 # Baru", dan saat wali mengganti passwordnya sendiri lewat
 # /ganti-password (hanya akun guru; password admin tidak pernah
-# disimpan di situ). Tabel Kelola Guru menampilkan "PW: <password>"
-# di bawah username + lencana wali, selalu sinkron; halaman Edit Guru
-# menampilkan info yang sama di dekat username. Penugasan
+# disimpan di situ). Tabel Kelola Guru menampilkan password itu pada
+# kolom Password (tanpa username dan tanpa lencana wali), selalu
+# sinkron; halaman Edit Guru menampilkan info yang sama di dekat
+# username. Penugasan
 # dicabut/diganti -> nilai dikosongkan & baris PW hilang; guru bukan
 # wali tetap "—" tanpa baris PW. Hash PBKDF2 tetap satu-satunya dasar
 # pemeriksaan login, dan nilai tampilan ini ikut tersimpan & pulih
@@ -2910,11 +2912,11 @@ must(gpw and gpb, "AF: id kedua guru terbaca dari daftar")
 chunk_bebas = next((c for c in daftar_guru_af.split("<tr>")
                     if "<b>Guru PW Bebas</b>" in c), "")
 must("<td>&mdash;</td>" in chunk_bebas and "PW:" not in chunk_bebas,
-     "AF: guru bukan wali: sel Username tetap '—' tanpa baris PW")
+     "AF: guru bukan wali: sel Password tetap '—' tanpa password tampil")
 must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == "",
      "AF: guru baru: pass_sementara kosong di DB")
 
-# --- penunjukan: password flash tampil juga sebagai "PW: ..." ---
+# --- penunjukan: password flash tampil juga di kolom Password ---
 s, url, hasil = req(admin, f"/admin/kelas/{kpw_id}/wali",
                     {"wali_id": str(gpw)})
 m_af = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
@@ -2925,8 +2927,8 @@ must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == pw_af1,
 s, url, daftar_guru_af = req(admin, "/admin/guru")
 chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
                  if "<b>Guru PW Satu</b>" in c), "")
-must(f"PW: {pw_af1}" in chunk_pw,
-     "AF: Kelola Guru menampilkan 'PW: <password flash>' di sebelah username")
+must(f"<code>{pw_af1}</code>" in chunk_pw,
+     "AF: Kelola Guru: kolom Password menampilkan password flash penunjukan")
 s, url, edit_pw = req(admin, f"/admin/guru/{gpw}/edit")
 must(f"PW: {pw_af1}" in edit_pw,
      "AF: halaman Edit Guru menampilkan PW yang sama di dekat username")
@@ -2941,8 +2943,8 @@ must(pw_af2 != pw_af1, "AF: password baru berbeda dari sebelumnya")
 s, url, daftar_guru_af = req(admin, "/admin/guru")
 chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
                  if "<b>Guru PW Satu</b>" in c), "")
-must(f"PW: {pw_af2}" in chunk_pw and pw_af1 not in chunk_pw,
-     "AF: sesudah 'Buat Password Baru', tampilan PW = password BARU (lama hilang)")
+must(f"<code>{pw_af2}</code>" in chunk_pw and pw_af1 not in chunk_pw,
+     "AF: sesudah 'Buat Password Baru', kolom Password = password BARU (lama hilang)")
 must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == pw_af2,
      "AF: DB: pass_sementara diperbarui oleh 'Buat Password Baru'")
 
@@ -2959,8 +2961,8 @@ must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gpw,)) == "PilihanWali#
 s, url, daftar_guru_af = req(admin, "/admin/guru")
 chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
                  if "<b>Guru PW Satu</b>" in c), "")
-must("PW: PilihanWali#9" in chunk_pw and pw_af2 not in chunk_pw,
-     "AF: Kelola Guru menampilkan password BARU pilihan wali (yang lama hilang)")
+must("<code>PilihanWali#9</code>" in chunk_pw and pw_af2 not in chunk_pw,
+     "AF: Kelola Guru: kolom Password menampilkan password BARU pilihan wali (yang lama hilang)")
 s, url, edit_pw = req(admin, f"/admin/guru/{gpw}/edit")
 must("PW: PilihanWali#9" in edit_pw,
      "AF: halaman Edit Guru ikut menampilkan password pilihan wali")
@@ -3017,8 +3019,8 @@ admin_af, url, _ = login("admin", "admin123")
 s, url, daftar_guru_af2 = req(admin_af, "/admin/guru")
 chunk_pw2 = next((c for c in daftar_guru_af2.split("<tr>")
                   if "<b>Guru PW Satu</b>" in c), "")
-must(f"PW: {pw_af3}" in chunk_pw2,
-     "AF: sesudah pulih, Kelola Guru tetap menampilkan PW yang sama")
+must(f"<code>{pw_af3}</code>" in chunk_pw2,
+     "AF: sesudah pulih, Kelola Guru tetap menampilkan password yang sama")
 wali_af3 = client()
 s, url, hal = req(wali_af3, "/login-wali",
                   {"kelas_id": str(kpw_id), "password": pw_af3})
@@ -3038,7 +3040,7 @@ s, url, daftar_guru_af = req(admin, "/admin/guru")
 chunk_pw = next((c for c in daftar_guru_af.split("<tr>")
                  if "<b>Guru PW Satu</b>" in c), "")
 must("<td>&mdash;</td>" in chunk_pw and "PW:" not in chunk_pw,
-     "AF: sesudah dicabut, baris PW hilang (kembali '—' seperti guru biasa)")
+     "AF: sesudah dicabut, password hilang dari kolom Password (kembali '—')")
 
 # --- kelas dihapus: penugasan berakhir, password tampilan dibersihkan ---
 req(admin, "/admin/kelas", {"nama": "UJI-Kelas-PW2"})
@@ -3122,8 +3124,8 @@ must(dbq("SELECT pass_sementara FROM users WHERE id=?", (gi1,)) == pw_ag1,
 s, url, daftar_guru_ag = req(admin, "/admin/guru")
 chunk_gi1 = next((c for c in daftar_guru_ag.split("<tr>")
                   if "<b>Guru Sebaris Satu</b>" in c), "")
-must(f"PW: {pw_ag1}" in chunk_gi1,
-     "AG: Kelola Guru menampilkan 'PW: <password sebaris>' di sebelah username")
+must(f"<code>{pw_ag1}</code>" in chunk_gi1,
+     "AG: Kelola Guru: kolom Password menampilkan password penunjukan sebaris")
 
 # --- rendering sesudah penunjukan: terpilih di barisnya, tersisih di lain ---
 s, url, daftar_kelas_ag = req(admin, "/admin/kelas")
@@ -3346,6 +3348,67 @@ must(urllib.parse.urlparse(url).path == "/login",
 s, url, hasil = req(admin, "/siswa/99999/unduh")
 must("Data tidak ditemukan." in hasil,
      "AH: unduh id tak dikenal -> 'Data tidak ditemukan.'")
+
+# ===========================================================================
+# Fase AI — KOLOM USERNAME DI KELOLA GURU DIGANTI KOLOM PASSWORD
+# (permintaan user: "username ganti password aja, trus wali1a dan
+# wali 1a nya hapus aja" — ditegaskan: TAMPILAN SAJA). Kepala kolom
+# Kelola Guru kini "Password"; baris guru yang sedang jadi wali hanya
+# menampilkan password yang sedang berlaku (pass_sementara), tanpa
+# username, tanpa lencana "Wali <kelas>", tanpa awalan "PW:"; guru
+# bukan wali tetap "—". Murni tampilan: login wali lewat username
+# (cadangan) dan lewat /login-wali (pilih kelas) tidak berubah.
+# ===========================================================================
+start_server()  # kembali ke DB scratch utama (DBUJI)
+admin, url, _ = login("admin", "admin123")
+req(admin, "/admin/kelas", {"nama": "UJI-Kelas-KolomPW"})
+s, url, form_siswa_ai = req(admin, "/admin/siswa")
+kkp_id = opt_val(form_siswa_ai, "UJI-Kelas-KolomPW")
+must(kkp_id, "AI: kelas UJI-Kelas-KolomPW dibuat")
+req(admin, "/admin/guru", {"nama": "Guru Kolom Wali", "mapel": "UJI-KolomMapel"})
+req(admin, "/admin/guru", {"nama": "Guru Kolom Bebas", "mapel": "UJI-KolomMapel"})
+s, url, daftar_guru_ai = req(admin, "/admin/guru")
+gkw = id_dari_daftar(daftar_guru_ai, "/admin/guru", "<b>Guru Kolom Wali</b>")
+gkb = id_dari_daftar(daftar_guru_ai, "/admin/guru", "<b>Guru Kolom Bebas</b>")
+must(gkw and gkb, "AI: id kedua guru terbaca dari daftar")
+s, url, hasil = req(admin, f"/admin/kelas/{kkp_id}/wali",
+                    {"wali_id": str(gkw)})
+m_ai = re.search(r"username (wali[^\s,]+), password sementara: (\S+)", hasil)
+must(m_ai is not None, "AI: penunjukan wali menerbitkan kredensial (flash)")
+user_ai, pw_ai = m_ai.group(1), m_ai.group(2)
+
+# --- (1) kepala kolom: Password ada, Username hilang dari tabel guru ---
+s, url, daftar_guru_ai = req(admin, "/admin/guru")
+must("<th>Password</th>" in daftar_guru_ai
+     and "<th>Username</th>" not in daftar_guru_ai,
+     "AI: Kelola Guru: kepala kolom kini 'Password', bukan 'Username'")
+
+# --- (2) baris wali: hanya password; tanpa username & tanpa lencana ---
+chunk_wali_ai = next((c for c in daftar_guru_ai.split("<tr>")
+                      if "<b>Guru Kolom Wali</b>" in c), "")
+must(f"<code>{pw_ai}</code>" in chunk_wali_ai,
+     "AI: baris wali menampilkan password yang berlaku di kolom Password")
+must(user_ai not in chunk_wali_ai and "wali-badge" not in chunk_wali_ai
+     and "PW:" not in chunk_wali_ai,
+     "AI: baris wali TANPA username, TANPA lencana wali, TANPA awalan 'PW:'")
+must("wali-badge" not in daftar_guru_ai,
+     "AI: seluruh tabel Kelola Guru bebas markup lencana wali")
+
+# --- (3) guru bukan wali: sel kolom Password tetap tanda pisah ---
+chunk_bebas_ai = next((c for c in daftar_guru_ai.split("<tr>")
+                       if "<b>Guru Kolom Bebas</b>" in c), "")
+must("<td>&mdash;</td>" in chunk_bebas_ai,
+     "AI: guru bukan wali: sel kolom Password tetap '—'")
+
+# --- (4) regresi login: username cadangan & pilih kelas tetap jalan ---
+wali_ai, url, _ = login(user_ai, pw_ai)
+must("dashboard" in url,
+     "AI: regresi: wali tetap bisa login lewat username (cadangan)")
+wali_ai2 = client()
+s, url, hal = req(wali_ai2, "/login-wali",
+                  {"kelas_id": str(kkp_id), "password": pw_ai})
+must("dashboard" in url,
+     "AI: regresi: wali tetap bisa login lewat /login-wali (pilih kelas)")
 
 stop_server()
 if os.path.exists(DBUJI):

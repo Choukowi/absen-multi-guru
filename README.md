@@ -123,9 +123,10 @@ Hanya **wali kelas** yang bisa login sebagai guru. Modelnya:
   pada dropdown (atau menyimpan edit kelas) tidak mengubah password
   yang berlaku.
 - **Password selalu terlihat admin**: password wali yang **sedang
-  berlaku** selalu tampil di sebelah username pada tabel **Kelola
-  Guru** (baris kecil `PW: ...` di bawah username + lencana wali) dan
-  juga pada halaman **Edit Guru** wali yang bersangkutan. Tampilan itu
+  berlaku** selalu tampil pada kolom **Password** di tabel **Kelola
+  Guru** (hanya untuk guru yang sedang menjadi wali kelas; guru lain
+  tampil `—`, tanpa username dan tanpa lencana wali) dan juga pada
+  halaman **Edit Guru** wali yang bersangkutan. Tampilan itu
   **selalu sinkron**: terisi saat penunjukan, berubah saat admin
   menekan **Buat Password Baru**, dan ikut berubah saat **wali
   mengganti passwordnya sendiri** — jadi admin tidak pernah kehilangan
