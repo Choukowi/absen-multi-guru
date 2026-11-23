@@ -2311,20 +2311,24 @@ def _siswa_detail(self, user, sid, flash):
     edit = (f' <a class="btn-aksi" href="/admin/siswa/{st["id"]}/edit">Edit</a>'
             if user["role"] == "admin" else "")
     if user["role"] == "guru":
+        bar_cari = ""
         kembali = ('<div class="card"><p style="margin:0">'
                    '<a class="btn-aksi" href="/tabel-siswa">Kembali ke tabel siswa</a>'
                    '</p></div>')
     else:
-        kembali = """<div class="card search-card">
+        bar_cari = """<div class="card search-card">
       <form method="get" action="/cari" class="search-form">
         <label class="search-label">Cari lagi
           <input name="q" placeholder="Cari nama siswa, NIS, kelas, nama guru, atau mata pelajaran…"></label>
         <button type="submit" class="btn btn-primary">Cari</button>
       </form>
-      <p style="margin:12px 0 0"><a class="btn-aksi" href="/cari">Kembali ke pencarian</a></p>
-    </div>"""
+    </div>
+    """
+        kembali = ('<div class="card"><p style="margin:0">'
+                   '<a class="btn-aksi" href="/cari">Kembali ke pencarian</a>'
+                   '</p></div>')
     body = f"""<h2>Detail Siswa</h2>
-    <div class="card">
+    {bar_cari}<div class="card">
       <p><b>{esc(st["nama"])}</b></p>
       <p class="muted">NIS: <code>{esc(st["kode"])}</code> &mdash; Kelas: {esc(st["kelas"])}{edit}</p>
       <p><a class="btn btn-excel" href="/siswa/{st['id']}/unduh">{icon("download")} Unduh Excel</a></p>
