@@ -2316,7 +2316,7 @@ def _siswa_detail(self, user, sid, flash):
                    '<a class="btn-aksi" href="/tabel-siswa">Kembali ke tabel siswa</a>'
                    '</p></div>')
     else:
-        bar_cari = """<form method="get" action="/cari" class="search-form">
+        bar_cari = """<form method="get" action="/cari" class="search-form kompak">
         <label class="search-label">Cari lagi
           <input name="q" placeholder="Cari nama siswa, NIS, kelas, nama guru, atau mata pelajaran…"></label>
         <button type="submit" class="btn btn-primary">Cari</button>
@@ -2326,11 +2326,20 @@ def _siswa_detail(self, user, sid, flash):
         kembali = ('<div class="card"><p style="margin:0">'
                    '<a class="btn-aksi" href="/cari">Kembali ke pencarian</a>'
                    '</p></div>')
+    chips = "".join(
+        f'<div class="id-chip c-{s.lower()}"><span class="n">{total[s]}</span>'
+        f'<span class="l">{s}</span></div>' for s in status_list)
     body = f"""<h2>Detail Siswa</h2>
     <div class="card">
-      {bar_cari}<p><b>{esc(st["nama"])}</b></p>
-      <p class="muted">NIS: <code>{esc(st["kode"])}</code> &mdash; Kelas: {esc(st["kelas"])}{edit}</p>
-      <p><a class="btn btn-excel" href="/siswa/{st['id']}/unduh">{icon("download")} Unduh Excel</a></p>
+      {bar_cari}<div class="id-flex">
+        <div>
+          <p class="id-nama"><b>{esc(st["nama"])}</b></p>
+          <p class="muted" style="margin:0">NIS: <code>{esc(st["kode"])}</code> &mdash; Kelas: {esc(st["kelas"])}{edit}</p>
+        </div>
+        <a class="btn btn-excel" href="/siswa/{st['id']}/unduh">{icon("download")} Unduh Excel</a>
+      </div>
+      <p class="muted" style="margin:16px 0 0;font-size:12px">Total kehadiran 6 bulan terakhir:</p>
+      <div class="id-total" style="margin-top:6px">{chips}</div>
     </div>
     <div class="card table-card"><h3>Rekap Absensi 6 Bulan Terakhir</h3>
     <div class="table-scroll">
