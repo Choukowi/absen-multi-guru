@@ -196,9 +196,33 @@ ol.plain-list li::marker { color: var(--muted); font-weight: 600; }
 .search-card { padding: 16px 20px; }
 .search-form { display: flex; gap: 12px; align-items: flex-end; }
 .search-form .search-label { flex: 1; margin: 0; }
+@media (min-width: 641px) {
+  .search-form.kompak .search-label { flex: 0 1 430px; }
+}
 @media (max-width: 640px) {
   .search-form { flex-direction: column; align-items: stretch; }
 }
+
+/* ---------- Detail Siswa: kartu identitas ---------- */
+.id-flex { display: flex; justify-content: space-between; align-items: center;
+  gap: 14px; flex-wrap: wrap; }
+.id-nama { font-size: 19px; margin: 0 0 4px; }
+.id-total { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.id-chip { flex: 1 1 92px; border-radius: 12px; padding: 9px 6px 8px;
+  text-align: center; }
+.id-chip .n { display: block; font-size: 21px; font-weight: 800; line-height: 1.15; }
+.id-chip .l { font-size: 11px; color: #475569; text-transform: uppercase;
+  letter-spacing: .04em; }
+.id-chip.c-hadir { background: var(--hijau-bg); }
+.id-chip.c-hadir .n { color: var(--hijau); }
+.id-chip.c-terlambat { background: var(--kuning-bg); }
+.id-chip.c-terlambat .n { color: var(--kuning); }
+.id-chip.c-sakit { background: var(--biru-bg); }
+.id-chip.c-sakit .n { color: var(--biru-t); }
+.id-chip.c-izin { background: var(--ungu-bg); }
+.id-chip.c-izin .n { color: var(--ungu); }
+.id-chip.c-alpa { background: var(--merah-bg); }
+.id-chip.c-alpa .n { color: var(--merah); }
 
 /* ---------- Dashboard ---------- */
 /* 7 kartu statistik selalu SATU baris: grid 7 kolom sama lebar di layar
