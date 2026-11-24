@@ -2660,12 +2660,14 @@ def _admin_guru(self, user, flash):
       <p class="muted"><small>Guru di sini adalah data induk (nama + mapel).
       Login dibuat otomatis hanya saat guru ditunjuk sebagai wali kelas
       di menu Kelola Kelas.</small></p>
-      <button type="submit" class="btn btn-primary">Tambah Guru</button></form></div>
-    <div class="card form-card"><h3>Upload Data Guru dari Excel</h3>
-    <p class="muted">Tambah banyak guru sekaligus dari file Excel (.xlsx)
-    dengan 2 kolom: <b>Nama | Mata Pelajaran</b> (baris pertama judul kolom).
-    Guru dengan nama yang sudah terdaftar akan dilewati, tidak digandakan.</p>
-    <p><a class="btn btn-ghost" href="/admin/guru/template">{icon('download')} Unduh Template Excel Guru</a></p>
+      <button type="submit" class="btn btn-primary">Tambah Guru</button></form>
+    <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0 6px">
+    <h4 style="margin:6px 0 4px">Atau Upload Data Guru dari Excel</h4>
+    <p class="muted" style="margin:0 0 8px">Tambah banyak guru sekaligus dari
+    file Excel (.xlsx) dengan 2 kolom: <b>Nama | Mata Pelajaran</b>
+    (baris pertama judul kolom). Guru dengan nama yang sudah terdaftar
+    akan dilewati, tidak digandakan.</p>
+    <p style="margin:0 0 4px"><a class="btn btn-ghost" href="/admin/guru/template">{icon('download')} Unduh Template Excel Guru</a></p>
     <form method="post" action="/admin/guru/import" enctype="multipart/form-data">
       <label>File Excel guru (.xlsx) <input type="file" name="berkas"
         accept=".xlsx" required></label>
@@ -3215,14 +3217,15 @@ def _admin_kelas_detail(self, user, kid, flash):
       <label>Nama <input name="nama" required></label>
       <label>NIS <input name="kode" required></label>
       <input type="hidden" name="class_id" value="{kelas['id']}">
-      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>
-    <div class="card form-card"><h3>Upload Data Siswa Kelas {esc(kelas["nama"])} dari Excel</h3>
-    <p class="muted">Tambah banyak siswa ke kelas <b>{esc(kelas["nama"])}</b>
-    sekaligus dari file Excel (.xlsx) dengan 2 kolom: <b>Nama | NIS</b>
-    (baris pertama judul kolom). Semua siswa di file ini masuk ke kelas
-    ini &mdash; tidak perlu kolom Kelas. NIS yang sudah terdaftar akan
-    dilewati, tidak digandakan.</p>
-    <p><a class="btn btn-ghost" href="/admin/kelas/{kelas['id']}/template">{icon('download')} Unduh Template Excel Siswa Kelas Ini</a></p>
+      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form>
+    <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0 6px">
+    <h4 style="margin:6px 0 4px">Atau Upload Data Siswa Kelas {esc(kelas["nama"])} dari Excel</h4>
+    <p class="muted" style="margin:0 0 8px">Tambah banyak siswa ke kelas
+    <b>{esc(kelas["nama"])}</b> sekaligus dari file Excel (.xlsx) dengan
+    2 kolom: <b>Nama | NIS</b> (baris pertama judul kolom). Semua siswa di
+    file ini masuk ke kelas ini &mdash; tidak perlu kolom Kelas. NIS yang
+    sudah terdaftar akan dilewati, tidak digandakan.</p>
+    <p style="margin:0 0 4px"><a class="btn btn-ghost" href="/admin/kelas/{kelas['id']}/template">{icon('download')} Unduh Template Excel Siswa Kelas Ini</a></p>
     <form method="post" action="/admin/kelas/{kelas['id']}/import" enctype="multipart/form-data">
       <label>File Excel siswa (.xlsx) <input type="file" name="berkas"
         accept=".xlsx" required></label>
