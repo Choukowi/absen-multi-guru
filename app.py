@@ -912,6 +912,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_kehadiran_edit(user, f)
         if user["role"] == "admin":
             if path == "/admin/guru": return self.post_admin_guru(f)
+            if path == "/admin/guru/kirim-wa-semua":
+                return self.post_admin_guru_kirim_wa_semua()
             if path.startswith("/admin/guru/") and path.endswith("/edit"):
                 return self.post_admin_guru_edit(int(path.split("/")[3]), f)
             if path.startswith("/admin/guru/") and path.endswith("/hapus"):
@@ -2748,6 +2750,14 @@ def _admin_guru(self, user, flash):
                       f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
     items = items or '<tr><td colspan="7" class="muted">Belum ada guru.</td></tr>'
     body = f"""<h2>Kelola Guru</h2>
+    <form method="post" action="/admin/guru/kirim-wa-semua"
+      onsubmit="return confirm('Kirim password ke SEMUA wali kelas yang punya password &amp; nomor WA sekarang?')"
+      style="margin:0 0 12px">
+      <button type="submit" class="btn btn-primary">Kirim WA Semua</button>
+      <span class="muted"><small>Sekali klik, password terkirim barengan ke
+      semua guru yang sedang jadi wali kelas (yang nomor WA-nya kosong
+      dilewati &amp; dilaporkan). Butuh gateway WA terhubung di
+      Pengaturan Tampilan.</small></span></form>
     <div class="card table-card"><div class="table-scroll">
     <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
     <th>Mapel</th><th>Password</th><th>No WA</th><th>Kode QR</th><th>Aksi</th></tr></thead>
@@ -4230,6 +4240,63 @@ def _post_admin_guru_kirim_wa(self, gid):
         "perangkat di Fonnte (masih terhubung & kuota cukup), lalu coba lagi.")
 
 
+def _post_admin_guru_kirim_wa_semua(self):
+    """Kirim password ke SEMUA wali kelas sekaligus lewat gateway
+    Fonnte (permintaan user: habis menunjuk beberapa wali, kirimnya
+    barengan, tidak satu-satu). Penerima: guru yang SEDANG jadi wali
+    kelas dan punya password berlaku. Yang nomor WA-nya kosong/invalid
+    dilewati dan namanya dilaporkan; yang gateway-nya menolak masuk
+    daftar gagal beserta alasannya. Pesan tiap guru memakai kelas &
+    password-nya sendiri (template yang sama dengan kirim tunggal)."""
+    token = (get_pengaturan()["wa_token"] or "").strip()
+    if not token:
+        return self.redirect(
+            "/admin/guru",
+            "Kirim WA Semua butuh gateway WA terhubung dulu: daftar "
+            "Fonnte (gratis), hubungkan WA admin, lalu tempel tokennya "
+            "di Pengaturan Tampilan > WhatsApp — Kirim Password "
+            "Otomatis (Fonnte).")
+    sekolah = (get_pengaturan()["nama_sekolah"] or "").strip() or "sekolah"
+    conn = db()
+    rows = conn.execute(
+        """SELECT u.*, c.nama AS kelas_nama FROM users u
+           JOIN classes c ON c.wali_id = u.id
+           WHERE u.role='guru' AND u.pass_sementara <> ''
+           ORDER BY u.nama""").fetchall()
+    conn.close()
+    if not rows:
+        return self.redirect(
+            "/admin/guru",
+            "Belum ada wali kelas yang punya password untuk dikirim. "
+            "Tunjuk dulu wali kelasnya di menu Kelola Kelas.")
+    host = self.headers.get("Host", "")
+    skema = self.headers.get("X-Forwarded-Proto") or (
+        "http" if host.startswith(("127.0.0.1", "localhost")) else "https")
+    url_login = f"{skema}://{host}/login" if host else "/login"
+    terkirim, dilewati, gagal = [], [], []
+    for r in rows:
+        nomor = _normal_no_wa(r["no_wa"])
+        if not nomor:
+            dilewati.append(r["nama"])
+            continue
+        pesan = _pesan_wa_wali(r["nama"], r["kelas_nama"],
+                               r["pass_sementara"], sekolah, url_login)
+        ok, info = _kirim_wa_gateway(nomor, pesan, token)
+        if ok:
+            terkirim.append(r["nama"])
+        else:
+            gagal.append(f"{r['nama']} ({info})")
+    ringkas = (f"Kirim WA Semua selesai: {len(terkirim)} terkirim")
+    if terkirim:
+        ringkas += " (" + ", ".join(terkirim) + ")"
+    if dilewati:
+        ringkas += (f"; {len(dilewati)} dilewati karena nomor WA "
+                    "kosong: " + ", ".join(dilewati))
+    if gagal:
+        ringkas += f"; {len(gagal)} GAGAL: " + ", ".join(gagal)
+    return self.redirect("/admin/guru", ringkas + ".")
+
+
 def _post_admin_guru_import(self):
     data, err = _ambil_file_excel(self, "/admin/guru")
     if err is not None:
@@ -4466,6 +4533,7 @@ Handler.post_admin_tampilan_jam_absen = _post_admin_tampilan_jam_absen
 Handler.post_admin_tampilan_wa_gateway = _post_admin_tampilan_wa_gateway
 Handler.post_admin_tampilan_wa_gateway_putus = _post_admin_tampilan_wa_gateway_putus
 Handler.post_admin_guru_kirim_wa = _post_admin_guru_kirim_wa
+Handler.post_admin_guru_kirim_wa_semua = _post_admin_guru_kirim_wa_semua
 Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
 Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
 Handler.wallpaper_file = _wallpaper_file
