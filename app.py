@@ -1747,7 +1747,7 @@ class Handler(BaseHTTPRequestHandler):
                              f"{orang['nama']} ditandai {status} pada {tanggal}.")
 
     # -- Excel (openpyxl) ---------------------------------------------------------
-    def _buat_excel(self, judul, subjudul, label_kolom3, baris, hari_list, nama_sekolah=""):
+    def _buat_excel(self, judul, subjudul, label_kolom3, baris, hari_list, nama_sekolah="", kop=None):
         """baris: list dict {nama, kolom3, sel: [(status, jam)|None x6], total: {status: n}}"""
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -1765,11 +1765,9 @@ class Handler(BaseHTTPRequestHandler):
         akhir = get_column_letter(nkol)
         periode = (f"Minggu: {NAMA_HARI[0]}, {fmt_tanggal(hari_list[0])} – "
                    f"{NAMA_HARI[5]}, {fmt_tanggal(hari_list[-1])}")
-        off = 1 if nama_sekolah else 0  # baris nama sekolah di paling atas bila diisi
-        if nama_sekolah:
-            ws.merge_cells(f"A1:{akhir}1")
-            c = ws["A1"]; c.value = nama_sekolah
-            c.font = Font(bold=True, size=16, color="1F3864")
+        # Kepala kop surat sekolah (nama + alamat + kontak + garis
+        # pemisah); off = jumlah baris kepala yang dipakai.
+        off = _tulis_kop_excel(ws, nama_sekolah, kop, nkol)
         ws.merge_cells(f"A{1 + off}:{akhir}{1 + off}")
         c = ws[f"A{1 + off}"]; c.value = judul
         c.font = Font(bold=True, size=15, color="1F3864")
@@ -1896,9 +1894,10 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     sel.append(None)
             baris.append({"nama": s["nama"], "kolom3": s["kode"], "sel": sel, "total": total})
+        peng = get_pengaturan()
         data = self._buat_excel("ABSENSI SISWA", f"Kelas: {kelas['nama']}", "NIS",
                                 baris, hari_list,
-                                nama_sekolah=get_pengaturan()["nama_sekolah"])
+                                nama_sekolah=peng["nama_sekolah"], kop=peng)
         nama_file = self._nama_file_excel("Absensi", kelas["nama"], hari_list)
         return self.send_bytes(
             data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1927,8 +1926,9 @@ class Handler(BaseHTTPRequestHandler):
                     sel.append(None)
             baris.append({"nama": g["nama"], "kolom3": g["mapel"] or "",
                           "sel": sel, "total": total})
+        peng = get_pengaturan()
         data = self._buat_excel("ABSENSI GURU", "Semua Guru", "Mapel", baris, hari_list,
-                                nama_sekolah=get_pengaturan()["nama_sekolah"])
+                                nama_sekolah=peng["nama_sekolah"], kop=peng)
         nama_file = self._nama_file_excel("Absensi_Guru", "Semua_Guru", hari_list)
         return self.send_bytes(
             data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2139,7 +2139,7 @@ def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
     peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": "",
             "warna_menu": "", "kejelasan_wp": "", "tema": "",
-            "wa_token": "",
+            "wa_token": "", "kop_alamat": "", "kop_telepon": "", "kop_email": "",
             "jam_batas_hadir": JAM_DEFAULT_STR["jam_batas_hadir"],
             "jam_batas_alpa": JAM_DEFAULT_STR["jam_batas_alpa"],
             "jam_panel_selesai": JAM_DEFAULT_STR["jam_panel_selesai"]}
@@ -2449,15 +2449,69 @@ def _siswa_detail(self, user, sid, flash):
     return self.send_html(layout(user, "Detail Siswa", body, flash))
 
 
-def _buat_excel_detail_siswa(data, nama_sekolah):
+def _tulis_kop_excel(ws, nama_sekolah, kop, nkol):
+    """Tulis kepala kop surat sekolah di baris atas lembar Excel.
+
+    Dipakai semua unduhan Excel: nama sekolah (tebal 16, biru,
+    tengah), lalu alamat, lalu baris "Telp: ... | Email: ...",
+    lalu garis pemisah ganda seperti kop surat resmi. Baris yang
+    kosong dilewati; bila tidak ada nama maupun isi kop, tidak
+    menulis apa pun. Mengembalikan jumlah baris kepala yang
+    dipakai (0 bila kosong) agar isi di bawahnya bisa bergeser."""
+    from openpyxl.styles import Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    akhir = get_column_letter(nkol)
+    alamat = ((kop or {}).get("kop_alamat") or "").strip()
+    telp = ((kop or {}).get("kop_telepon") or "").strip()
+    email = ((kop or {}).get("kop_email") or "").strip()
+    nama = (nama_sekolah or "").strip()
+    if not nama and not alamat and not telp and not email:
+        return 0
+    r = 1
+    if nama:
+        ws.merge_cells(f"A{r}:{akhir}{r}")
+        c = ws[f"A{r}"]
+        c.value = nama
+        c.font = Font(bold=True, size=16, color="1F3864")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        r += 1
+    if alamat:
+        ws.merge_cells(f"A{r}:{akhir}{r}")
+        c = ws[f"A{r}"]
+        c.value = alamat
+        c.font = Font(size=11, color="404040")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        r += 1
+    kontak = " | ".join(x for x in
+                        ([f"Telp: {telp}"] if telp else []) +
+                        ([f"Email: {email}"] if email else []))
+    if kontak:
+        ws.merge_cells(f"A{r}:{akhir}{r}")
+        c = ws[f"A{r}"]
+        c.value = kontak
+        c.font = Font(size=11, color="404040")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        r += 1
+    if alamat or telp or email:
+        garis = Side(style="double", color="000000")
+        for j in range(1, nkol + 1):
+            ws.cell(row=r, column=j).border = Border(bottom=garis)
+        ws.row_dimensions[r].height = 8
+        r += 1
+    return r - 1
+
+
+def _buat_excel_detail_siswa(data, nama_sekolah, kop=None):
     """Bangun .xlsx Detail Siswa dari data _data_detail_siswa.
 
-    Lembar "Rekap 6 Bulan": kepala berisi nama sekolah (dari
-    pengaturan) + judul "Detail Absensi Siswa" + blok identitas
-    (Nama/NIS/Kelas), lalu tabel rekap persis halaman (Bulan, Hadir,
-    Terlambat, Sakit, Izin, Alpa + baris Total tebal). Lembar "Rincian
-    Kehadiran": baris rincian persis halaman (Tanggal, Status, Jam —
-    Jam HH:MM untuk Hadir/Terlambat, "—" untuk Sakit/Izin/Alpa).
+    Lembar "Rekap 6 Bulan": kepala kop surat sekolah (nama + alamat +
+    kontak + garis pemisah, dari pengaturan) + judul "Detail Absensi
+    Siswa" + blok identitas (Nama/NIS/Kelas), lalu tabel rekap persis
+    halaman (Bulan, Hadir, Terlambat, Sakit, Izin, Alpa + baris Total
+    tebal). Bila kop kosong, kepala kembali seperti dulu (nama sekolah
+    saja di baris 1). Lembar "Rincian Kehadiran": baris rincian persis
+    halaman (Tanggal, Status, Jam — Jam HH:MM untuk Hadir/Terlambat,
+    "—" untuk Sakit/Izin/Alpa).
     Gaya mengikuti ekspor mingguan (_buat_excel): judul biru 1F3864,
     kepala tabel 203764 huruf putih, garis tipis, zebra, warna status."""
     from openpyxl import Workbook
@@ -2477,24 +2531,29 @@ def _buat_excel_detail_siswa(data, nama_sekolah):
     # --- lembar 1: Rekap 6 Bulan ---
     ws = wb.active
     ws.title = "Rekap 6 Bulan"
-    ws.merge_cells("A1:F1")
-    c = ws["A1"]
-    c.value = nama_sekolah
-    c.font = Font(bold=True, size=16, color="1F3864")
-    ws.merge_cells("A2:F2")
-    c = ws["A2"]
+    # Kepala kop surat (nama + alamat + kontak + garis pemisah); bila
+    # kop kosong, baris 1 tetap dipakai nama sekolah seperti dulu.
+    off = _tulis_kop_excel(ws, nama_sekolah, kop, 6)
+    if off == 0:
+        ws.merge_cells("A1:F1")
+        c = ws["A1"]
+        c.value = nama_sekolah
+        c.font = Font(bold=True, size=16, color="1F3864")
+        off = 1
+    ws.merge_cells(f"A{1 + off}:F{1 + off}")
+    c = ws[f"A{1 + off}"]
     c.value = "Detail Absensi Siswa"
     c.font = Font(bold=True, size=15, color="1F3864")
     for i, (label, nilai) in enumerate(
             (("Nama", st["nama"]), ("NIS", st["kode"]),
              ("Kelas", st["kelas"]))):
-        r = 3 + i
+        r = 2 + off + i
         c = ws.cell(row=r, column=1, value=label)
         c.font = Font(bold=True, size=11, color="404040")
         ws.merge_cells(start_row=r, start_column=2,
                        end_row=r, end_column=6)
         ws.cell(row=r, column=2, value=nilai).font = Font(size=11)
-    r_head = 7
+    r_head = 6 + off
     for j, h in enumerate(["Bulan", *status_list], start=1):
         c = ws.cell(row=r_head, column=j, value=h)
         c.fill = fill_head
@@ -2528,7 +2587,7 @@ def _buat_excel_detail_siswa(data, nama_sekolah):
     ws.column_dimensions["A"].width = 22
     for j in range(2, 7):
         ws.column_dimensions[get_column_letter(j)].width = 11
-    ws.freeze_panes = "A8"
+    ws.freeze_panes = f"A{7 + off}"
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
@@ -2594,8 +2653,8 @@ def _siswa_detail_unduh(self, user, sid):
         conn.close()
         return self.redirect("/dashboard", "Data tidak ditemukan.")
     conn.close()
-    berkas = _buat_excel_detail_siswa(data,
-                                      get_pengaturan()["nama_sekolah"])
+    peng = get_pengaturan()
+    berkas = _buat_excel_detail_siswa(data, peng["nama_sekolah"], kop=peng)
 
     def bersih(s):
         return re.sub(r"[^\w.\-]+", "_", str(s)).strip("_") or "siswa"
@@ -3610,6 +3669,19 @@ def _admin_tampilan(self, user, flash):
       <label>Nama sekolah (tampil di menu &amp; judul Excel)
         <input name="nama_sekolah" value="{esc(peng['nama_sekolah'])}"
                placeholder="mis. SMA Negeri 1 Contoh"></label>
+      <p class="muted"><small><b>Kop surat sekolah</b> &mdash; tampil
+      sebagai kepala di atas setiap unduhan Excel (absensi mingguan
+      &amp; detail siswa). Kosongkan bila tidak mau memakai kop
+      surat.</small></p>
+      <label>Alamat sekolah (kop surat)
+        <input name="kop_alamat" value="{esc(peng['kop_alamat'])}"
+               placeholder="mis. Jl. Merdeka No. 10, Jakarta"></label>
+      <label>Telepon sekolah (kop surat)
+        <input name="kop_telepon" value="{esc(peng['kop_telepon'])}"
+               placeholder="mis. (021) 1234567"></label>
+      <label>Email sekolah (kop surat)
+        <input name="kop_email" value="{esc(peng['kop_email'])}"
+               placeholder="mis. info@sekolah.sch.id"></label>
       <label>Warna latar aplikasi</label>
       <div class="swatches">{swatches}
         <label class="swatch kustom" title="Warna kustom">
@@ -3677,6 +3749,8 @@ def _post_admin_tampilan(self, f):
     conn = db()
     set_pengaturan(conn, "bg_color", warna.lower())
     set_pengaturan(conn, "nama_sekolah", (f.get("nama_sekolah") or "").strip())
+    for _k in ("kop_alamat", "kop_telepon", "kop_email"):
+        set_pengaturan(conn, _k, (f.get(_k) or "").strip()[:200])
     conn.commit(); conn.close()
     return self.redirect("/admin/tampilan", "Pengaturan tampilan disimpan.")
 
