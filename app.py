@@ -453,6 +453,7 @@ def nav_items(user):
         return [("dashboard", "/dashboard", "Dashboard", "grid"),
                 ("tabel-siswa", "/tabel-siswa", "Tabel Siswa", "users"),
                 ("cetak", "/cetak", "Cetak Kartu", "printer"),
+                ("kartu-pelajar", "/kartu-pelajar", "Kartu Pelajar", "cap"),
                 ("ganti-password", "/ganti-password", "Ganti Password", "key")]
     items = [("dashboard", "/dashboard", "Dashboard", "grid"),
              ("scan", "/scan-gerbang", "Scan Gerbang", "scan"),
@@ -465,6 +466,7 @@ def nav_items(user):
                   ("tampilan", "/admin/tampilan", "Pengaturan Tampilan", "sliders"),
                   ("backup", "/admin/backup", "Backup & Pulihkan", "download")]
     items += [("cetak", "/cetak", "Cetak Kartu", "printer"),
+              ("kartu-pelajar", "/kartu-pelajar", "Kartu Pelajar", "cap"),
               ("ganti-password", "/ganti-password", "Ganti Password", "key")]
     return items
 
@@ -698,7 +700,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- GET routes ---------------------------------------------------------
     def route_get(self, path, qs, flash):
-        if path == "/static/style.css" or path == "/static/app.js":
+        if path in ("/static/style.css", "/static/app.js", "/static/jsQR.js"):
             fname = os.path.join(BASE_DIR, path.lstrip("/"))
             ctype = "text/css" if path.endswith(".css") else "application/javascript"
             with open(fname, "rb") as f:
@@ -810,6 +812,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.cetak_guru(user, flash)
         if path.startswith("/cetak/kelas/"):
             return self.cetak_kelas(user, int(path.split("/")[3]), flash)
+        if path == "/kartu-pelajar":
+            return self.kartu_pelajar_index(user, flash)
+        if path.startswith("/kartu-pelajar/kelas/"):
+            return self.kartu_pelajar_kelas(user, int(path.split("/")[3]), flash)
+        if path.startswith("/kartu-pelajar/siswa/"):
+            return self.kartu_pelajar_siswa(user, int(path.split("/")[3]), flash)
         if user["role"] == "admin":
             if path == "/admin/guru": return self.admin_guru(user, flash)
             if path.startswith("/admin/guru/") and path.endswith("/edit"):
@@ -1359,7 +1367,7 @@ class Handler(BaseHTTPRequestHandler):
         </section>
         <section class="card"><h3>Sudah Scan Hari Ini (<span id="jumlahDatang">{jumlah_datang}</span>)</h3>
         <ul class="arrivals" id="daftarDatang">{items}</ul></section>
-        <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>"""
+        <script src="/static/jsQR.js"></script>"""
         return self.send_html(layout(user, "Scan Gerbang", body, flash, aktif="scan"))
 
     def post_scan(self, user, f):
@@ -2022,6 +2030,127 @@ class Handler(BaseHTTPRequestHandler):
         <div class="lembar">{cards or '<p>Belum ada guru aktif.</p>'}</div>"""
         return self.send_html(layout(user, "Cetak Kartu QR Guru", body, flash, aktif="cetak"))
 
+    # -- kartu pelajar --------------------------------------------------------
+    # Kartu pelajar dibuat OTOMATIS dari data siswa: begitu siswa diinput
+    # (form Tambah Siswa atau import Excel per kelas), kartunya langsung
+    # ada di menu ini — tidak ada langkah pembuatan kartu terpisah dan
+    # tidak ada data kartu yang disimpan sendiri. Templat memakai kop
+    # sekolah dari Pengaturan Tampilan (nama + logo + alamat + telepon +
+    # email, yang sama dengan kop Excel): baris kop yang masih kosong
+    # dilewati begitu saja.
+    def kartu_pelajar_index(self, user, flash):
+        conn = db()
+        classes = conn.execute("SELECT * FROM classes ORDER BY nama").fetchall()
+        conn.close()
+        wali_row = info_wali(user)
+        if wali_row:
+            # Wali kelas: hanya kartu pelajar kelasnya sendiri.
+            body = f"""<h2>Kartu Pelajar</h2>
+        <div class="menu-grid">
+        <a class="menu-card" href="/kartu-pelajar/kelas/{wali_row['id']}">{icon("cap")}<span>Kartu Pelajar &mdash; {esc(wali_row['nama'])}</span></a></div>
+        <p class="muted"><small>Kartu dibuat otomatis dari data siswa &mdash; begitu siswa diinput, kartunya langsung ada di sini. Tinggal cetak.</small></p>"""
+            return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
+        links = "".join(
+            f'<a class="menu-card" href="/kartu-pelajar/kelas/{c["id"]}">{icon("cap")}'
+            f'<span>Kartu Pelajar &mdash; {esc(c["nama"])}</span></a>' for c in classes)
+        links = links or '<p class="muted">Belum ada kelas.</p>'
+        body = f"""<h2>Kartu Pelajar</h2>
+        <p class="muted">Kartu dibuat <b>otomatis</b> dari data siswa &mdash; begitu siswa diinput (form atau import Excel), kartunya langsung ada di sini. Tidak perlu dibuat satu-satu.</p>
+        <h3>Kartu Pelajar per Kelas</h3><div class="menu-grid">{links}</div>"""
+        return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
+
+    def _kartu_pelajar_html(self, st, kelas_nama, wali_nama, peng):
+        """Satu kartu pelajar (ukuran kartu ID 85,6 x 54 mm): kepala kop
+        sekolah (logo + nama + alamat), kotak foto 3x4 (aplikasi belum
+        menyimpan foto siswa, jadi kotaknya untuk tempel foto), data siswa
+        (nama, NIS, kelas, wali kelas), dan kaki berisi QR NIS + kontak
+        sekolah dari kop."""
+        nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
+        alamat = (peng["kop_alamat"] or "").strip()
+        telp = (peng["kop_telepon"] or "").strip()
+        email = (peng["kop_email"] or "").strip()
+        kontak = " &bull; ".join(x for x in
+                                 ([esc(alamat)] if alamat else []) +
+                                 ([f"Telp: {esc(telp)}"] if telp else []) +
+                                 ([esc(email)] if email else []))
+        if peng["logo"]:
+            logo_html = (f'<img class="kp-logo" src="/logo/{esc(peng["logo"])}" '
+                         f'alt="Logo sekolah">')
+        else:
+            logo_html = f'<span class="kp-logo-fallback">{icon("logo")}</span>'
+        alamat_html = (f'<div class="kp-alamat">{esc(alamat)}</div>'
+                       if alamat else "")
+        kontak_html = (f'<br>{kontak}' if kontak else "")
+        wali_html = esc(wali_nama) if (wali_nama or "").strip() else "&mdash;"
+        return f"""<div class="kpelajar">
+          <div class="kp-head">{logo_html}<div class="kp-head-teks">
+            <div class="kp-sekolah">{esc(nama_sekolah)}</div>{alamat_html}</div>
+            <span class="kp-judul">KARTU PELAJAR</span></div>
+          <div class="kp-gold"></div>
+          <div class="kp-body">
+            <div class="kp-foto">{icon("badge")}<span>FOTO<br>3 &times; 4</span></div>
+            <div class="kp-data">
+              <div class="kp-nama">{esc(st["nama"])}</div>
+              <div class="kp-baris"><span class="kp-label">NIS</span><span class="kp-nilai">{esc(st["kode"])}</span></div>
+              <div class="kp-baris"><span class="kp-label">Kelas</span><span class="kp-nilai">{esc(kelas_nama)}</span></div>
+              <div class="kp-baris"><span class="kp-label">Wali Kelas</span><span class="kp-nilai">{wali_html}</span></div>
+            </div>
+          </div>
+          <div class="kp-foot">
+            <img class="kp-qr" src="/qr/{urllib.parse.quote(st["kode"])}.png" alt="QR {esc(st["kode"])}">
+            <div class="kp-ket">Kartu ini adalah tanda pengenal resmi siswa {esc(nama_sekolah)}.{kontak_html}</div>
+          </div>
+        </div>"""
+
+    def _kelas_dan_wali(self, conn, class_id):
+        return conn.execute(
+            "SELECT c.*, u.nama AS wali_nama FROM classes c "
+            "LEFT JOIN users u ON u.id = c.wali_id WHERE c.id=?",
+            (class_id,)).fetchone()
+
+    def kartu_pelajar_kelas(self, user, class_id, flash):
+        conn = db()
+        kelas = self._kelas_dan_wali(conn, class_id)
+        if not kelas or (user["role"] == "guru"
+                         and class_id != self.wali_kelas_id(user)):
+            # Untuk wali kelas, kelas lain diperlakukan seperti tidak ada.
+            conn.close()
+            return self.send_html(layout(user, "404", "<p>Kelas tidak ditemukan.</p>"), status=404)
+        students = conn.execute("SELECT * FROM students WHERE class_id=? ORDER BY nama",
+                                (class_id,)).fetchall()
+        conn.close()
+        peng = get_pengaturan()
+        cards = "".join(
+            self._kartu_pelajar_html(st, kelas["nama"], kelas["wali_nama"], peng)
+            for st in students)
+        body = f"""<h2 class="noprint">Kartu Pelajar - {esc(kelas["nama"])}</h2>
+        <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
+        &nbsp;<a class="btn btn-ghost" href="/kartu-pelajar">Pilih Kelas Lain</a>
+        &nbsp;Kartu dibuat otomatis dari data siswa ({len(students)} siswa). Kotak foto dikosongkan untuk tempel foto 3&times;4; QR di tiap kartu adalah NIS siswa untuk scan di gerbang.</p>
+        <div class="lembar-kp">{cards or '<p>Belum ada siswa di kelas ini.</p>'}</div>"""
+        return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
+
+    def kartu_pelajar_siswa(self, user, sid, flash):
+        conn = db()
+        st = conn.execute(
+            "SELECT s.*, c.nama AS kelas_nama, u.nama AS wali_nama "
+            "FROM students s JOIN classes c ON c.id = s.class_id "
+            "LEFT JOIN users u ON u.id = c.wali_id WHERE s.id=?",
+            (sid,)).fetchone()
+        if not st or (user["role"] == "guru"
+                      and st["class_id"] != self.wali_kelas_id(user)):
+            conn.close()
+            return self.send_html(layout(user, "404", "<p>Siswa tidak ditemukan.</p>"), status=404)
+        conn.close()
+        peng = get_pengaturan()
+        card = self._kartu_pelajar_html(st, st["kelas_nama"], st["wali_nama"], peng)
+        body = f"""<h2 class="noprint">Kartu Pelajar - {esc(st["nama"])}</h2>
+        <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
+        &nbsp;<a class="btn btn-ghost" href="/kartu-pelajar/kelas/{st["class_id"]}">Semua Kartu Kelas {esc(st["kelas_nama"])}</a>
+        &nbsp;<a class="btn btn-ghost" href="/siswa/{st["id"]}">Kembali ke Detail Siswa</a></p>
+        <div class="lembar-kp">{card}</div>"""
+        return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
+
     def qr_png(self, raw_code):
         code = urllib.parse.unquote(raw_code)
         try:
@@ -2436,6 +2565,7 @@ def _siswa_detail(self, user, sid, flash):
           <p class="muted" style="margin:0">NIS: <code>{esc(st["kode"])}</code> &mdash; Kelas: {esc(st["kelas"])}{edit}</p>
         </div>
         <a class="btn btn-excel" href="/siswa/{st['id']}/unduh">{icon("download")} Unduh Excel</a>
+        <a class="btn" href="/kartu-pelajar/siswa/{st['id']}">{icon("cap")} Kartu Pelajar</a>
       </div>
       <p class="muted" style="margin:16px 0 0;font-size:12px">Total kehadiran 6 bulan terakhir:</p>
       <div class="id-total" style="margin-top:6px">{chips}</div>
