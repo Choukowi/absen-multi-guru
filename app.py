@@ -36,6 +36,7 @@ import sqlite3
 import string
 import tempfile
 import urllib.parse
+import urllib.request
 import zipfile
 from datetime import datetime, timedelta, time as dtime
 from http.cookies import SimpleCookie
@@ -915,6 +916,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.post_admin_guru_edit(int(path.split("/")[3]), f)
             if path.startswith("/admin/guru/") and path.endswith("/hapus"):
                 return self.post_admin_guru_hapus(int(path.split("/")[3]))
+            if path.startswith("/admin/guru/") and path.endswith("/kirim-wa"):
+                return self.post_admin_guru_kirim_wa(int(path.split("/")[3]))
             if path.startswith("/admin/guru/") and path.endswith("/password-baru"):
                 return self.post_admin_guru_password_baru(int(path.split("/")[3]))
             if path.startswith("/admin/guru/") and path.endswith("/aktifkan"):
@@ -938,6 +941,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.post_admin_tampilan_tema(f)
             if path == "/admin/tampilan/jam-absen":
                 return self.post_admin_tampilan_jam_absen(f)
+            if path == "/admin/tampilan/wa-gateway":
+                return self.post_admin_tampilan_wa_gateway(f)
+            if path == "/admin/tampilan/wa-gateway/putus":
+                return self.post_admin_tampilan_wa_gateway_putus()
             if path == "/admin/tampilan/wallpaper/hapus":
                 return self.post_admin_tampilan_wallpaper_hapus()
             if path == "/admin/tampilan/logo/hapus":
@@ -2130,6 +2137,7 @@ def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
     peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": "",
             "warna_menu": "", "kejelasan_wp": "", "tema": "",
+            "wa_token": "",
             "jam_batas_hadir": JAM_DEFAULT_STR["jam_batas_hadir"],
             "jam_batas_alpa": JAM_DEFAULT_STR["jam_batas_alpa"],
             "jam_panel_selesai": JAM_DEFAULT_STR["jam_panel_selesai"]}
@@ -2629,6 +2637,36 @@ def _pesan_wa_wali(nama, kelas, password, sekolah, url_login):
             "Ganti Password. Terima kasih.")
 
 
+WA_API_URL = os.environ.get("ABSEN_WA_API_URL", "https://api.fonnte.com/send")
+
+
+def _kirim_wa_gateway(nomor_intl, pesan, token):
+    """Kirim WA OTOMATIS lewat gateway Fonnte (permintaan user: klik
+    Kirim WA langsung terkirim, tanpa membuka aplikasi WhatsApp).
+    Mengembalikan (ok, keterangan). Token adalah token perangkat
+    Fonnte milik admin yang tersimpan di settings (wa_token)."""
+    body = urllib.parse.urlencode(
+        {"target": nomor_intl, "message": pesan}).encode()
+    req = urllib.request.Request(
+        WA_API_URL, data=body,
+        headers={"Authorization": token,
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = r.read().decode("utf-8", "replace")
+    except Exception as e:
+        return False, f"tidak dapat menghubungi gateway WA ({e})"
+    try:
+        hasil = json.loads(data)
+    except Exception:
+        return False, "jawaban gateway tidak dikenal"
+    if hasil.get("status"):
+        return True, ""
+    alasan = (hasil.get("reason") or hasil.get("detail")
+              or hasil.get("message") or "gateway menolak pengiriman")
+    return False, str(alasan)
+
+
 def _admin_guru(self, user, flash):
     conn = db()
     rows = conn.execute(
@@ -2638,7 +2676,9 @@ def _admin_guru(self, user, flash):
                   c.nama AS wali_kelas_nama
            FROM users u LEFT JOIN classes c ON c.wali_id = u.id
            WHERE u.role='guru' ORDER BY u.nama""").fetchall()
-    nama_sekolah = (get_pengaturan()["nama_sekolah"] or "").strip() or "sekolah"
+    peng_awal = get_pengaturan()
+    nama_sekolah = (peng_awal["nama_sekolah"] or "").strip() or "sekolah"
+    wa_token = (peng_awal["wa_token"] or "").strip()
     conn.close()
     host = self.headers.get("Host", "")
     skema = self.headers.get("X-Forwarded-Proto") or (
@@ -2665,12 +2705,20 @@ def _admin_guru(self, user, flash):
         sel_wa = f'<td>{esc(r["no_wa"])}</td>' if r["no_wa"] else '<td>&mdash;</td>'
         tombol_wa = ""
         if r["wali_kelas_nama"] and r["pass_sementara"]:
-            pesan_wa = _pesan_wa_wali(r["nama"], r["wali_kelas_nama"],
-                                      r["pass_sementara"], nama_sekolah,
-                                      url_login)
-            tombol_wa = (f'<a class="btn-aksi" target="_blank" rel="noopener" '
-                         f'href="{esc(_link_kirim_wa(r["no_wa"], pesan_wa))}">'
-                         'Kirim WA</a>')
+            if wa_token:
+                # Gateway terhubung: tombol = form POST, server yang
+                # mengirim otomatis (tanpa membuka WhatsApp).
+                tombol_wa = (
+                    f'<form method="post" action="/admin/guru/{r["id"]}/kirim-wa" '
+                    f'class="inline"><button type="submit" class="btn-aksi">'
+                    'Kirim WA</button></form>')
+            else:
+                pesan_wa = _pesan_wa_wali(r["nama"], r["wali_kelas_nama"],
+                                          r["pass_sementara"], nama_sekolah,
+                                          url_login)
+                tombol_wa = (f'<a class="btn-aksi" target="_blank" rel="noopener" '
+                             f'href="{esc(_link_kirim_wa(r["no_wa"], pesan_wa))}">'
+                             'Kirim WA</a>')
         dasar = (f'<tr><td class="no">{i + 1}</td>'
                  f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
                  f'<td>{esc(r["mapel"] or "-")}</td>'
@@ -2762,23 +2810,36 @@ def _admin_guru_edit(self, user, gid, flash):
         pw_tampil = esc(g["pass_sementara"]) if g["pass_sementara"] else "&mdash;"
         tombol_wa_edit = ""
         if g["pass_sementara"]:
-            sekolah2 = (get_pengaturan()["nama_sekolah"] or "").strip() or "sekolah"
+            peng2 = get_pengaturan()
+            sekolah2 = (peng2["nama_sekolah"] or "").strip() or "sekolah"
+            token2 = (peng2["wa_token"] or "").strip()
             host2 = self.headers.get("Host", "")
             skema2 = self.headers.get("X-Forwarded-Proto") or (
                 "http" if host2.startswith(("127.0.0.1", "localhost")) else "https")
             url2 = f"{skema2}://{host2}/login" if host2 else "/login"
-            pesan2 = _pesan_wa_wali(g["nama"], wali_row["nama"],
-                                    g["pass_sementara"], sekolah2, url2)
-            tombol_wa_edit = (
-                f'<p style="margin-top:10px"><a class="btn btn-primary" '
-                f'target="_blank" rel="noopener" '
-                f'href="{esc(_link_kirim_wa(g["no_wa"], pesan2))}">'
-                'Kirim Password via WA</a></p>'
-                '<p class="muted"><small>WhatsApp terbuka ke nomor guru '
-                'ini dengan pesan berisi password yang sudah terisi; '
-                'tinggal tekan kirim. Bila nomor WA masih kosong, isi '
-                'dulu di form Edit Guru di atas (atau pilih kontaknya '
-                'sendiri di WhatsApp).</small></p>')
+            if token2:
+                tombol_wa_edit = (
+                    f'<form method="post" action="/admin/guru/{g["id"]}/kirim-wa" '
+                    'style="margin-top:10px"><button type="submit" '
+                    'class="btn btn-primary">Kirim Password via WA</button></form>'
+                    '<p class="muted"><small>Gateway WA terhubung: sekali '
+                    'klik, password <b>langsung terkirim otomatis</b> ke '
+                    'nomor WA guru ini &mdash; tanpa membuka WhatsApp. '
+                    'Pastikan nomor WA guru sudah terisi di form Edit '
+                    'Guru di atas.</small></p>')
+            else:
+                pesan2 = _pesan_wa_wali(g["nama"], wali_row["nama"],
+                                        g["pass_sementara"], sekolah2, url2)
+                tombol_wa_edit = (
+                    f'<p style="margin-top:10px"><a class="btn btn-primary" '
+                    f'target="_blank" rel="noopener" '
+                    f'href="{esc(_link_kirim_wa(g["no_wa"], pesan2))}">'
+                    'Kirim Password via WA</a></p>'
+                    '<p class="muted"><small>WhatsApp terbuka ke nomor guru '
+                    'ini dengan pesan berisi password yang sudah terisi; '
+                    'tinggal tekan kirim. Agar sekali klik langsung '
+                    'terkirim otomatis, hubungkan gateway WA di menu '
+                    'Pengaturan Tampilan.</small></p>')
         blok_login = f"""
     <div class="card form-card"><h3>Login Wali Kelas</h3>
       <label>Username <input value="{esc(g['username'])}" readonly disabled></label>
@@ -3459,6 +3520,19 @@ def _admin_tampilan(self, user, flash):
             f'<span class="tema-chip" '
             f'style="background:linear-gradient(135deg,{g1_t},{g2_t})"></span>'
             f'<span class="tema-nama">{esc(nama_t)}{ket_html}</span></label>')
+    if (peng["wa_token"] or "").strip():
+        ekor = esc(peng["wa_token"].strip()[-4:])
+        wa_status = (f'<p><b style="color:#15803d">Terhubung</b> '
+                     f'<span class="muted">(token tersimpan, berakhiran '
+                     f'&bull;&bull;&bull;&bull;{ekor})</span></p>')
+        wa_putus = ('''<form method="post" action="/admin/tampilan/wa-gateway/putus"
+          class="inline" onsubmit="return confirm('Putuskan gateway WA? Tombol Kirim WA kembali membuka WhatsApp (tidak otomatis).')">
+          <button type="submit" class="btn btn-danger">Putuskan Gateway</button></form>''')
+    else:
+        wa_status = ('<p><b style="color:#b45309">Belum terhubung</b> '
+                     '<span class="muted">(tombol Kirim WA masih membuka '
+                     'WhatsApp)</span></p>')
+        wa_putus = ""
     wp_html = ""
     if peng["wallpaper"]:
         wp_html = f"""<div class="wp-preview"><img src="/wallpaper/{esc(peng['wallpaper'])}"
@@ -3493,6 +3567,25 @@ def _admin_tampilan(self, user, flash):
       Perubahan langsung berlaku untuk scan, Alpa otomatis, dan dashboard
       &mdash; tanpa perlu memasang ulang aplikasi.</small></p>
       <button type="submit" class="btn btn-primary">Simpan Jam Absensi</button></form></div>
+    <div class="card form-card"><h3>WhatsApp — Kirim Password Otomatis (Fonnte)</h3>
+    {wa_status}
+    <p class="muted">Agar tombol <b>Kirim WA</b> di Kelola Guru sekali klik
+    <b>langsung terkirim otomatis</b> ke WA wali kelas (tanpa membuka
+    aplikasi WhatsApp), hubungkan akun WhatsApp admin lewat layanan
+    Fonnte: (1) daftar di <b>fonnte.com</b>, (2) hubungkan perangkat
+    dengan memindai kode QR memakai WhatsApp admin, (3) salin
+    <b>token</b> perangkatnya dan tempel di sini, lalu simpan.
+    Sesudah itu pengiriman berjalan dari server aplikasi memakai nomor
+    WA admin yang terhubung di Fonnte.</p>
+    <form method="post" action="/admin/tampilan/wa-gateway">
+      <label>Token Fonnte <input type="password" name="wa_token"
+        autocomplete="off" placeholder="tempel token perangkat Fonnte di sini"></label>
+      <p class="muted"><small>Token tersimpan aman di pengaturan aplikasi
+      dan tidak ditampilkan lagi (hanya status terhubung/belum). Kosongkan
+      halaman ini tidak mengubah token; untuk mengganti, tempel token
+      baru lalu simpan.</small></p>
+      <button type="submit" class="btn btn-primary">Simpan &amp; Hubungkan</button></form>
+    {wa_putus}</div>
     <div class="card form-card"><h3>Tema</h3>
     <p class="muted">Tema pastel membuat tampilan lebih lembut: latar
     berwarna pastel, sudut kartu lebih bulat, dan aksen gradasi.
@@ -3615,6 +3708,34 @@ def _post_admin_tampilan_tema(self, f):
     set_pengaturan(conn, "tema", slug)
     conn.commit(); conn.close()
     return self.redirect("/admin/tampilan", "Tema disimpan.")
+
+
+def _post_admin_tampilan_wa_gateway(self, f):
+    """Simpan token gateway WA (Fonnte) dari Pengaturan Tampilan.
+    Token kosong ditolak agar token lama tidak terhapus tak sengaja;
+    memutus koneksi memakai tombol Putuskan Gateway tersendiri."""
+    token = (f.get("wa_token") or "").strip()
+    if not token:
+        return self.redirect(
+            "/admin/tampilan",
+            "Token Fonnte kosong; tidak ada yang disimpan. Tempel token "
+            "perangkat dari fonnte.com terlebih dahulu.")
+    conn = db()
+    set_pengaturan(conn, "wa_token", token)
+    conn.commit(); conn.close()
+    return self.redirect(
+        "/admin/tampilan",
+        "Gateway WA terhubung. Tombol Kirim WA di Kelola Guru sekarang "
+        "mengirim otomatis ke WA wali kelas.")
+
+
+def _post_admin_tampilan_wa_gateway_putus(self):
+    conn = db()
+    set_pengaturan(conn, "wa_token", "")
+    conn.commit(); conn.close()
+    return self.redirect(
+        "/admin/tampilan",
+        "Gateway WA diputuskan. Tombol Kirim WA kembali membuka WhatsApp.")
 
 
 def _post_admin_tampilan_jam_absen(self, f):
@@ -4060,6 +4181,55 @@ def _post_admin_kelas_import(self, kid):
     return self.redirect(kembali, pesan + ".")
 
 
+def _post_admin_guru_kirim_wa(self, gid):
+    """Kirim password wali kelas ke WA gurunya SECARA OTOMATIS lewat
+    gateway Fonnte (token admin di settings wa_token). Validasi: guru
+    ada, sedang jadi wali, punya password berlaku, nomor WA terisi,
+    dan token gateway sudah dihubungkan."""
+    conn = db()
+    g = self._get_guru(conn, gid)
+    if not g:
+        conn.close()
+        return self.redirect("/admin/guru", "Guru tidak ditemukan.")
+    wali_row = conn.execute("SELECT * FROM classes WHERE wali_id=?",
+                            (gid,)).fetchone()
+    token = (get_pengaturan()["wa_token"] or "").strip()
+    sekolah = (get_pengaturan()["nama_sekolah"] or "").strip() or "sekolah"
+    conn.close()
+    if not wali_row or not g["pass_sementara"]:
+        return self.redirect(
+            "/admin/guru",
+            "Password hanya bisa dikirim untuk guru yang sedang menjadi "
+            "wali kelas dan punya password berlaku.")
+    if not token:
+        return self.redirect(
+            "/admin/guru",
+            "Kirim otomatis belum aktif: hubungkan dulu token gateway WA "
+            "di Pengaturan Tampilan > WhatsApp (Fonnte).")
+    nomor = _normal_no_wa(g["no_wa"])
+    if not nomor:
+        return self.redirect(
+            f"/admin/guru/{gid}/edit",
+            f"Nomor WA {g['nama']} belum diisi atau tidak valid; isi dulu "
+            "di form Edit Guru ini, lalu kirim lagi.")
+    host = self.headers.get("Host", "")
+    skema = self.headers.get("X-Forwarded-Proto") or (
+        "http" if host.startswith(("127.0.0.1", "localhost")) else "https")
+    url_login = f"{skema}://{host}/login" if host else "/login"
+    pesan = _pesan_wa_wali(g["nama"], wali_row["nama"],
+                           g["pass_sementara"], sekolah, url_login)
+    ok, info = _kirim_wa_gateway(nomor, pesan, token)
+    if ok:
+        return self.redirect(
+            "/admin/guru",
+            f"Password wali kelas {wali_row['nama']} terkirim otomatis "
+            f"ke WA {g['nama']} ({g['no_wa']}).")
+    return self.redirect(
+        "/admin/guru",
+        f"Pengiriman WA ke {g['nama']} GAGAL: {info}. Periksa koneksi "
+        "perangkat di Fonnte (masih terhubung & kuota cukup), lalu coba lagi.")
+
+
 def _post_admin_guru_import(self):
     data, err = _ambil_file_excel(self, "/admin/guru")
     if err is not None:
@@ -4293,6 +4463,9 @@ Handler.post_admin_tampilan_warna_menu = _post_admin_tampilan_warna_menu
 Handler.post_admin_tampilan_kejelasan_wp = _post_admin_tampilan_kejelasan_wp
 Handler.post_admin_tampilan_tema = _post_admin_tampilan_tema
 Handler.post_admin_tampilan_jam_absen = _post_admin_tampilan_jam_absen
+Handler.post_admin_tampilan_wa_gateway = _post_admin_tampilan_wa_gateway
+Handler.post_admin_tampilan_wa_gateway_putus = _post_admin_tampilan_wa_gateway_putus
+Handler.post_admin_guru_kirim_wa = _post_admin_guru_kirim_wa
 Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
 Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
 Handler.wallpaper_file = _wallpaper_file
