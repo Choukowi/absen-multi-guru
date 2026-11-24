@@ -37,6 +37,14 @@ Ini proyek kode mandiri yang bisa di-deploy sendiri.
   riwayatnya tetap tersimpan).
 - **Cetak Kartu QR**: lembar kartu siswa per kelas (nama, kelas, QR, NIS)
   dan kartu semua guru (nama, mapel, QR, kode guru), siap cetak A4.
+- **Kartu Pelajar**: kartu ID siswa 85,6 x 54 mm per kelas, dibuat
+  **otomatis** dari data siswa (begitu siswa diinput, kartunya langsung
+  ada — lewat form maupun import Excel). Templat memakai kop sekolah
+  dari Pengaturan Tampilan (logo + nama + alamat + telepon + email,
+  sama dengan kop Excel): kepala gradasi + garis emas, kotak foto 3x4
+  untuk tempel foto, nama/NIS/kelas/wali kelas, dan QR NIS di kaki
+  kartu untuk scan di gerbang. Satu kartu juga bisa dibuka dari halaman
+  Detail Siswa. Wali kelas hanya melihat kartu kelasnya sendiri.
 - **Pengaturan Tampilan** (admin): nama sekolah (tampil di aplikasi &
   judul Excel), warna latar aplikasi (8 warna contoh + pemilih warna
   kustom), dan **wallpaper sekolah** (unggah JPG/PNG/WebP maks ±5 MB,
@@ -57,9 +65,10 @@ Ini proyek kode mandiri yang bisa di-deploy sendiri.
 - Database: **SQLite** satu file (`data/absen.db`, dibuat otomatis).
 - Paket tambahan (`requirements.txt`): `qrcode` + `Pillow` (gambar QR
   kartu), `openpyxl` (unduhan Excel).
-- Scan QR di browser: `jsQR` 1.4.0 dari CDN jsDelivr (`static/app.js`);
-  kamera browser butuh konteks aman (**HTTPS** atau `localhost`) dan
-  koneksi internet untuk memuat jsQR. Fallback: ketik NIS/kode guru manual.
+- Scan QR di browser: `jsQR` 1.4.0 tersimpan LOKAL di aplikasi
+  (`static/jsQR.js`) — scan kamera jalan penuh TANPA internet.
+  Kamera browser butuh konteks aman (**HTTPS** atau `localhost`).
+  Fallback: ketik NIS/kode guru manual.
 
 ## Menjalankan secara lokal
 
