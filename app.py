@@ -170,6 +170,8 @@ CREATE TABLE IF NOT EXISTS users (
     aktif INTEGER NOT NULL DEFAULT 1,
     mapel TEXT DEFAULT '',
     kode_qr TEXT,
+    no_wa TEXT DEFAULT '',          -- nomor WhatsApp guru (kolom No WA di
+                                    -- Kelola Guru + tombol Kirim Password via WA)
     pass_sementara TEXT DEFAULT ''  -- password guru (wali) yang SEDANG berlaku,
                                     -- teks biasa KHUSUS tampilan admin di Kelola
                                     -- Guru; login tetap diperiksa via hash PBKDF2
@@ -283,6 +285,8 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN kode_qr TEXT")
     if "pass_sementara" not in kolom_users:
         conn.execute("ALTER TABLE users ADD COLUMN pass_sementara TEXT DEFAULT ''")
+    if "no_wa" not in kolom_users:
+        conn.execute("ALTER TABLE users ADD COLUMN no_wa TEXT DEFAULT ''")
     # Model "login hanya wali kelas": classes.wali_id menunjuk guru (users.id)
     # yang menjadi wali kelas itu. NULL = belum ada wali (guru belum bisa login).
     kolom_kelas = {r["name"] for r in conn.execute("PRAGMA table_info(classes)")}
@@ -2594,6 +2598,37 @@ def _siswa_detail_unduh(self, user, sid):
         filename=nama_file)
 
 
+def _normal_no_wa(nomor):
+    """Normalisasi nomor WA ke format internasional tanpa '+':
+    08xx -> 628xx, 8xx -> 628xx, 628xx tetap. Kosong bila tak layak."""
+    d = re.sub(r"\D", "", nomor or "")
+    if d.startswith("0"):
+        d = "62" + d[1:]
+    elif d.startswith("8"):
+        d = "62" + d
+    return d if len(d) >= 10 else ""
+
+
+def _link_kirim_wa(nomor, teks):
+    """Link wa.me berisi pesan siap kirim. Bila nomor kosong/invalid,
+    pakai tautan berbagi WhatsApp (admin memilih kontaknya sendiri)."""
+    d = _normal_no_wa(nomor)
+    q = urllib.parse.quote(teks)
+    if d:
+        return f"https://wa.me/{d}?text={q}"
+    return f"https://api.whatsapp.com/send?text={q}"
+
+
+def _pesan_wa_wali(nama, kelas, password, sekolah, url_login):
+    return (f"Halo Bapak/Ibu {nama}, berikut password login Wali Kelas "
+            f"{kelas} untuk aplikasi absensi {sekolah}.\n"
+            f"Login: {url_login} lalu pilih kartu \"Login Wali Kelas\", "
+            f"pilih kelas {kelas}, dan masukkan password di bawah ini.\n"
+            f"Password: {password}\n"
+            "Mohon ganti password setelah login pertama lewat menu "
+            "Ganti Password. Terima kasih.")
+
+
 def _admin_guru(self, user, flash):
     conn = db()
     rows = conn.execute(
@@ -2603,7 +2638,12 @@ def _admin_guru(self, user, flash):
                   c.nama AS wali_kelas_nama
            FROM users u LEFT JOIN classes c ON c.wali_id = u.id
            WHERE u.role='guru' ORDER BY u.nama""").fetchall()
+    nama_sekolah = (get_pengaturan()["nama_sekolah"] or "").strip() or "sekolah"
     conn.close()
+    host = self.headers.get("Host", "")
+    skema = self.headers.get("X-Forwarded-Proto") or (
+        "http" if host.startswith(("127.0.0.1", "localhost")) else "https")
+    url_login = f"{skema}://{host}/login" if host else "/login"
     items = ""
     for i, r in enumerate(rows):
         nama_js = js_str(r["nama"])
@@ -2622,12 +2662,23 @@ def _admin_guru(self, user, flash):
         else:
             # Bukan wali: belum punya login (login lahir dari penunjukan wali).
             sel_user = '<td>&mdash;</td>'
+        sel_wa = f'<td>{esc(r["no_wa"])}</td>' if r["no_wa"] else '<td>&mdash;</td>'
+        tombol_wa = ""
+        if r["wali_kelas_nama"] and r["pass_sementara"]:
+            pesan_wa = _pesan_wa_wali(r["nama"], r["wali_kelas_nama"],
+                                      r["pass_sementara"], nama_sekolah,
+                                      url_login)
+            tombol_wa = (f'<a class="btn-aksi" target="_blank" rel="noopener" '
+                         f'href="{esc(_link_kirim_wa(r["no_wa"], pesan_wa))}">'
+                         'Kirim WA</a>')
         dasar = (f'<tr><td class="no">{i + 1}</td>'
                  f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
                  f'<td>{esc(r["mapel"] or "-")}</td>'
                  f'{sel_user}'
+                 f'{sel_wa}'
                  f'<td><code>{esc(r["kode_qr"] or "-")}</code></td>'
                  f'<td class="aksi"><span class="aksi-grup">'
+                 f'{tombol_wa}'
                  f'<a class="btn-aksi" href="/admin/guru/{r["id"]}/edit">Edit</a>')
         if not r["aktif"]:
             items += (dasar + '(nonaktif) '
@@ -2647,16 +2698,17 @@ def _admin_guru(self, user, flash):
                       f'<form method="post" action="/admin/guru/{r["id"]}/hapus" class="inline" '
                       f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
                       f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
-    items = items or '<tr><td colspan="6" class="muted">Belum ada guru.</td></tr>'
+    items = items or '<tr><td colspan="7" class="muted">Belum ada guru.</td></tr>'
     body = f"""<h2>Kelola Guru</h2>
     <div class="card table-card"><div class="table-scroll">
     <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
-    <th>Mapel</th><th>Password</th><th>Kode QR</th><th>Aksi</th></tr></thead>
+    <th>Mapel</th><th>Password</th><th>No WA</th><th>Kode QR</th><th>Aksi</th></tr></thead>
     <tbody>{items}</tbody></table></div></div>
     <div class="card form-card"><h3>Tambah Guru</h3>
     <form method="post" action="/admin/guru">
       <label>Nama <input name="nama" required></label>
       <label>Mata Pelajaran <input name="mapel" required placeholder="mis. Matematika"></label>
+      <label>Nomor WA <input name="no_wa" inputmode="tel" placeholder="mis. 0812xxxxxxx (boleh kosong)"></label>
       <p class="muted"><small>Guru di sini adalah data induk (nama + mapel).
       Login dibuat otomatis hanya saat guru ditunjuk sebagai wali kelas
       di menu Kelola Kelas.</small></p>
@@ -2664,9 +2716,9 @@ def _admin_guru(self, user, flash):
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0 6px">
     <h4 style="margin:6px 0 4px">Atau Upload Data Guru dari Excel</h4>
     <p class="muted" style="margin:0 0 8px">Tambah banyak guru sekaligus dari
-    file Excel (.xlsx) dengan 2 kolom: <b>Nama | Mata Pelajaran</b>
-    (baris pertama judul kolom). Guru dengan nama yang sudah terdaftar
-    akan dilewati, tidak digandakan.</p>
+    file Excel (.xlsx) dengan kolom: <b>Nama | Mata Pelajaran | Nomor WA</b>
+    (baris pertama judul kolom; Nomor WA boleh dikosongkan). Guru dengan
+    nama yang sudah terdaftar akan dilewati, tidak digandakan.</p>
     <p style="margin:0 0 4px"><a class="btn btn-ghost" href="/admin/guru/template">{icon('download')} Unduh Template Excel Guru</a></p>
     <form method="post" action="/admin/guru/import" enctype="multipart/form-data">
       <label>File Excel guru (.xlsx) <input type="file" name="berkas"
@@ -2683,9 +2735,10 @@ def _post_admin_guru(self, f):
     ph, salt = hash_password(secrets.token_urlsafe(24))
     conn = db()
     cur = conn.execute(
-        "INSERT INTO users (username,password_hash,salt,role,nama,mapel) VALUES (?,?,?,'guru',?,?)",
+        "INSERT INTO users (username,password_hash,salt,role,nama,mapel,no_wa) VALUES (?,?,?,'guru',?,?,?)",
         ("baru-" + secrets.token_hex(8), ph, salt,
-         f["nama"].strip(), f.get("mapel", "").strip()))
+         f["nama"].strip(), f.get("mapel", "").strip(),
+         f.get("no_wa", "").strip()))
     gid = cur.lastrowid
     conn.execute("UPDATE users SET username=?, kode_qr=? WHERE id=?",
                  (f"guru-{gid}", kode_qr_guru_baru(conn, gid), gid))
@@ -2707,6 +2760,25 @@ def _admin_guru_edit(self, user, gid, flash):
         return self.redirect("/admin/guru", "Guru tidak ditemukan.")
     if wali_row:
         pw_tampil = esc(g["pass_sementara"]) if g["pass_sementara"] else "&mdash;"
+        tombol_wa_edit = ""
+        if g["pass_sementara"]:
+            sekolah2 = (get_pengaturan()["nama_sekolah"] or "").strip() or "sekolah"
+            host2 = self.headers.get("Host", "")
+            skema2 = self.headers.get("X-Forwarded-Proto") or (
+                "http" if host2.startswith(("127.0.0.1", "localhost")) else "https")
+            url2 = f"{skema2}://{host2}/login" if host2 else "/login"
+            pesan2 = _pesan_wa_wali(g["nama"], wali_row["nama"],
+                                    g["pass_sementara"], sekolah2, url2)
+            tombol_wa_edit = (
+                f'<p style="margin-top:10px"><a class="btn btn-primary" '
+                f'target="_blank" rel="noopener" '
+                f'href="{esc(_link_kirim_wa(g["no_wa"], pesan2))}">'
+                'Kirim Password via WA</a></p>'
+                '<p class="muted"><small>WhatsApp terbuka ke nomor guru '
+                'ini dengan pesan berisi password yang sudah terisi; '
+                'tinggal tekan kirim. Bila nomor WA masih kosong, isi '
+                'dulu di form Edit Guru di atas (atau pilih kontaknya '
+                'sendiri di WhatsApp).</small></p>')
         blok_login = f"""
     <div class="card form-card"><h3>Login Wali Kelas</h3>
       <label>Username <input value="{esc(g['username'])}" readonly disabled></label>
@@ -2718,7 +2790,8 @@ def _admin_guru_edit(self, user, gid, flash):
       kelas dan tidak bisa diubah. Bila perlu mengganti passwordnya,
       buat password baru lewat tombol di bawah.</small></p>
       <form method="post" action="/admin/guru/{g['id']}/password-baru">
-        <button type="submit" class="btn btn-primary">Buat Password Baru</button></form></div>"""
+        <button type="submit" class="btn btn-primary">Buat Password Baru</button></form>
+      {tombol_wa_edit}</div>"""
     else:
         blok_login = """
     <div class="card"><p class="muted">Guru ini belum bisa login. Login
@@ -2728,6 +2801,7 @@ def _admin_guru_edit(self, user, gid, flash):
     <form method="post" action="/admin/guru/{g['id']}/edit" class="card form-card">
       <label>Nama <input name="nama" value="{esc(g['nama'])}" required></label>
       <label>Mata Pelajaran <input name="mapel" value="{esc(g['mapel'] or '')}" required></label>
+      <label>Nomor WA <input name="no_wa" value="{esc(g['no_wa'] or '')}" inputmode="tel" placeholder="mis. 0812xxxxxxx (boleh kosong)"></label>
       <label>Kode QR guru <input value="{esc(g['kode_qr'] or '')}" readonly disabled></label>
       <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
     {blok_login}
@@ -2744,8 +2818,9 @@ def _post_admin_guru_edit(self, gid, f):
     if not g:
         conn.close()
         return self.redirect("/admin/guru", "Guru tidak ditemukan.")
-    conn.execute("UPDATE users SET nama=?, mapel=? WHERE id=?",
-                 (f["nama"].strip(), f.get("mapel", "").strip(), gid))
+    conn.execute("UPDATE users SET nama=?, mapel=?, no_wa=? WHERE id=?",
+                 (f["nama"].strip(), f.get("mapel", "").strip(),
+                  f.get("no_wa", "").strip(), gid))
     conn.commit(); conn.close()
     return self.redirect("/admin/guru", "Guru diperbarui.")
 
@@ -3828,11 +3903,11 @@ def _admin_siswa_template(self):
 
 def _admin_guru_template(self):
     data = _buat_template_excel(
-        "Data Guru", ["Nama", "Mata Pelajaran"], [30, 24],
+        "Data Guru", ["Nama", "Mata Pelajaran", "Nomor WA"], [30, 24, 20],
         ["Template Import Data Guru",
          "Isi data guru mulai baris ke-2 pada lembar 'Data Guru'.",
-         "Kolom: Nama | Mata Pelajaran (mis. Matematika).",
-         "Contoh baris: Ibu Ani Wijaya | Matematika",
+         "Kolom: Nama | Mata Pelajaran | Nomor WA (Nomor WA boleh kosong).",
+         "Contoh baris: Ibu Ani Wijaya | Matematika | 081234567890",
          "Guru dengan nama yang sudah terdaftar akan dilewati.",
          "Simpan sebagai .xlsx, lalu upload di menu Kelola Guru."])
     return self.send_bytes(
@@ -3895,15 +3970,15 @@ def _post_admin_siswa_import(self):
     return self.redirect("/admin/siswa", pesan + ".")
 
 
-def _tambah_guru_conn(conn, nama, mapel):
+def _tambah_guru_conn(conn, nama, mapel, no_wa=""):
     """Buat satu guru (data induk) persis seperti Tambah Guru manual:
     username penanda diganti 'guru-<id>' + kode QR otomatis; login
     sungguhan lahir hanya lewat penunjukan wali kelas."""
     ph, salt = hash_password(secrets.token_urlsafe(24))
     cur = conn.execute(
-        "INSERT INTO users (username,password_hash,salt,role,nama,mapel) "
-        "VALUES (?,?,?,'guru',?,?)",
-        ("baru-" + secrets.token_hex(8), ph, salt, nama, mapel))
+        "INSERT INTO users (username,password_hash,salt,role,nama,mapel,no_wa) "
+        "VALUES (?,?,?,'guru',?,?,?)",
+        ("baru-" + secrets.token_hex(8), ph, salt, nama, mapel, no_wa))
     gid = cur.lastrowid
     conn.execute("UPDATE users SET username=?, kode_qr=? WHERE id=?",
                  (f"guru-{gid}", kode_qr_guru_baru(conn, gid), gid))
@@ -4007,6 +4082,7 @@ def _post_admin_guru_import(self):
             break
         nama = _sel_excel(row[0]) if len(row) > 0 else ""
         mapel = _sel_excel(row[1]) if len(row) > 1 else ""
+        no_wa = _sel_excel(row[2]) if len(row) > 2 else ""
         if not nama and not mapel:
             continue
         if not nama:
@@ -4015,7 +4091,7 @@ def _post_admin_guru_import(self):
         if nama.lower() in nama_ada:
             dilewati += 1
             continue
-        _tambah_guru_conn(conn, nama, mapel)
+        _tambah_guru_conn(conn, nama, mapel, no_wa)
         nama_ada.add(nama.lower())
         ditambah += 1
     conn.commit(); conn.close()
