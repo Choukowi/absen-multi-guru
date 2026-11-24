@@ -1747,7 +1747,7 @@ class Handler(BaseHTTPRequestHandler):
                              f"{orang['nama']} ditandai {status} pada {tanggal}.")
 
     # -- Excel (openpyxl) ---------------------------------------------------------
-    def _buat_excel(self, judul, subjudul, label_kolom3, baris, hari_list, nama_sekolah="", kop=None):
+    def _buat_excel(self, judul, subjudul, label_kolom3, baris, hari_list, nama_sekolah="", kop=None, logo_path=None):
         """baris: list dict {nama, kolom3, sel: [(status, jam)|None x6], total: {status: n}}"""
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -1765,9 +1765,9 @@ class Handler(BaseHTTPRequestHandler):
         akhir = get_column_letter(nkol)
         periode = (f"Minggu: {NAMA_HARI[0]}, {fmt_tanggal(hari_list[0])} – "
                    f"{NAMA_HARI[5]}, {fmt_tanggal(hari_list[-1])}")
-        # Kepala kop surat sekolah (nama + alamat + kontak + garis
-        # pemisah); off = jumlah baris kepala yang dipakai.
-        off = _tulis_kop_excel(ws, nama_sekolah, kop, nkol)
+        # Kepala kop surat sekolah (logo + nama + alamat + kontak +
+        # garis pemisah); off = jumlah baris kepala yang dipakai.
+        off = _tulis_kop_excel(ws, nama_sekolah, kop, nkol, logo_path)
         ws.merge_cells(f"A{1 + off}:{akhir}{1 + off}")
         c = ws[f"A{1 + off}"]; c.value = judul
         c.font = Font(bold=True, size=15, color="1F3864")
@@ -1897,7 +1897,8 @@ class Handler(BaseHTTPRequestHandler):
         peng = get_pengaturan()
         data = self._buat_excel("ABSENSI SISWA", f"Kelas: {kelas['nama']}", "NIS",
                                 baris, hari_list,
-                                nama_sekolah=peng["nama_sekolah"], kop=peng)
+                                nama_sekolah=peng["nama_sekolah"], kop=peng,
+                                logo_path=_logo_kop_path(peng))
         nama_file = self._nama_file_excel("Absensi", kelas["nama"], hari_list)
         return self.send_bytes(
             data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1928,7 +1929,8 @@ class Handler(BaseHTTPRequestHandler):
                           "sel": sel, "total": total})
         peng = get_pengaturan()
         data = self._buat_excel("ABSENSI GURU", "Semua Guru", "Mapel", baris, hari_list,
-                                nama_sekolah=peng["nama_sekolah"], kop=peng)
+                                nama_sekolah=peng["nama_sekolah"], kop=peng,
+                                logo_path=_logo_kop_path(peng))
         nama_file = self._nama_file_excel("Absensi_Guru", "Semua_Guru", hari_list)
         return self.send_bytes(
             data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2449,15 +2451,60 @@ def _siswa_detail(self, user, sid, flash):
     return self.send_html(layout(user, "Detail Siswa", body, flash))
 
 
-def _tulis_kop_excel(ws, nama_sekolah, kop, nkol):
+def _logo_kop_path(peng):
+    """Jalur berkas logo sekolah untuk kop surat Excel, atau None bila
+    belum ada logo terpasang."""
+    nama = ((peng or {}).get("logo") or "").strip()
+    if not nama:
+        return None
+    jalur = os.path.join(UPLOAD_DIR, nama)
+    return jalur if os.path.isfile(jalur) else None
+
+
+def _tempel_logo_kop(ws, logo_path):
+    """Tempel logo sekolah di kiri atas kepala kop surat Excel.
+
+    Logo dibatasi tingginya 60 px (lebar mengikuti rasio, maks 120 px)
+    agar muat di blok kop. WebP diubah dulu ke PNG lewat Pillow karena
+    Excel tidak menerima WebP. Mengembalikan True bila logo berhasil
+    ditempel; bila berkas rusak/tak terbaca, kop tetap jalan tanpa logo
+    (unduhan tidak boleh gagal hanya karena logo)."""
+    try:
+        from PIL import Image as PilImage
+        from openpyxl.drawing.image import Image as XlImage
+        with PilImage.open(logo_path) as im:
+            im.load()
+            lebar_asli, tinggi_asli = im.size
+            if tinggi_asli <= 0 or lebar_asli <= 0:
+                return False
+            tinggi = 60
+            lebar = round(tinggi * lebar_asli / tinggi_asli)
+            if lebar > 120:
+                lebar = 120
+                tinggi = round(120 * tinggi_asli / lebar_asli)
+            buf = io.BytesIO()
+            im.convert("RGBA").save(buf, "PNG")
+            buf.seek(0)
+            img = XlImage(buf)
+            img.width = lebar
+            img.height = tinggi
+            img.anchor = "A1"
+            ws.add_image(img)
+        return True
+    except Exception:
+        return False
+
+
+def _tulis_kop_excel(ws, nama_sekolah, kop, nkol, logo_path=None):
     """Tulis kepala kop surat sekolah di baris atas lembar Excel.
 
-    Dipakai semua unduhan Excel: nama sekolah (tebal 16, biru,
-    tengah), lalu alamat, lalu baris "Telp: ... | Email: ...",
-    lalu garis pemisah ganda seperti kop surat resmi. Baris yang
-    kosong dilewati; bila tidak ada nama maupun isi kop, tidak
-    menulis apa pun. Mengembalikan jumlah baris kepala yang
-    dipakai (0 bila kosong) agar isi di bawahnya bisa bergeser."""
+    Dipakai semua unduhan Excel: logo sekolah di kiri atas (bila ada
+    logo terpasang), nama sekolah (tebal 16, biru, tengah), lalu
+    alamat, lalu baris "Telp: ... | Email: ...", lalu garis pemisah
+    ganda seperti kop surat resmi. Baris yang kosong dilewati; bila
+    tidak ada nama maupun isi kop, tidak menulis apa pun.
+    Mengembalikan jumlah baris kepala yang dipakai (0 bila kosong)
+    agar isi di bawahnya bisa bergeser."""
     from openpyxl.styles import Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     akhir = get_column_letter(nkol)
@@ -2467,6 +2514,8 @@ def _tulis_kop_excel(ws, nama_sekolah, kop, nkol):
     nama = (nama_sekolah or "").strip()
     if not nama and not alamat and not telp and not email:
         return 0
+    if logo_path and _tempel_logo_kop(ws, logo_path):
+        ws.row_dimensions[1].height = 45
     r = 1
     if nama:
         ws.merge_cells(f"A{r}:{akhir}{r}")
@@ -2501,12 +2550,13 @@ def _tulis_kop_excel(ws, nama_sekolah, kop, nkol):
     return r - 1
 
 
-def _buat_excel_detail_siswa(data, nama_sekolah, kop=None):
+def _buat_excel_detail_siswa(data, nama_sekolah, kop=None, logo_path=None):
     """Bangun .xlsx Detail Siswa dari data _data_detail_siswa.
 
-    Lembar "Rekap 6 Bulan": kepala kop surat sekolah (nama + alamat +
-    kontak + garis pemisah, dari pengaturan) + judul "Detail Absensi
-    Siswa" + blok identitas (Nama/NIS/Kelas), lalu tabel rekap persis
+    Lembar "Rekap 6 Bulan": kepala kop surat sekolah (logo di kiri
+    atas bila ada logo terpasang + nama + alamat + kontak + garis
+    pemisah, dari pengaturan) + judul "Detail Absensi Siswa" + blok
+    identitas (Nama/NIS/Kelas), lalu tabel rekap persis
     halaman (Bulan, Hadir, Terlambat, Sakit, Izin, Alpa + baris Total
     tebal). Bila kop kosong, kepala kembali seperti dulu (nama sekolah
     saja di baris 1). Lembar "Rincian Kehadiran": baris rincian persis
@@ -2531,9 +2581,10 @@ def _buat_excel_detail_siswa(data, nama_sekolah, kop=None):
     # --- lembar 1: Rekap 6 Bulan ---
     ws = wb.active
     ws.title = "Rekap 6 Bulan"
-    # Kepala kop surat (nama + alamat + kontak + garis pemisah); bila
-    # kop kosong, baris 1 tetap dipakai nama sekolah seperti dulu.
-    off = _tulis_kop_excel(ws, nama_sekolah, kop, 6)
+    # Kepala kop surat (logo + nama + alamat + kontak + garis
+    # pemisah); bila kop kosong, baris 1 tetap dipakai nama sekolah
+    # seperti dulu.
+    off = _tulis_kop_excel(ws, nama_sekolah, kop, 6, logo_path)
     if off == 0:
         ws.merge_cells("A1:F1")
         c = ws["A1"]
@@ -2654,7 +2705,8 @@ def _siswa_detail_unduh(self, user, sid):
         return self.redirect("/dashboard", "Data tidak ditemukan.")
     conn.close()
     peng = get_pengaturan()
-    berkas = _buat_excel_detail_siswa(data, peng["nama_sekolah"], kop=peng)
+    berkas = _buat_excel_detail_siswa(data, peng["nama_sekolah"], kop=peng,
+                                      logo_path=_logo_kop_path(peng))
 
     def bersih(s):
         return re.sub(r"[^\w.\-]+", "_", str(s)).strip("_") or "siswa"
