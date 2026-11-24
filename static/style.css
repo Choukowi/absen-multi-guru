@@ -446,6 +446,15 @@ table.tabel.kelola td.aksi { white-space: normal; }
   font-weight: 700;
   text-shadow: 0 1px 0 rgba(255,255,255,.75), 0 0 8px rgba(255,255,255,.65); }
 footer .lisensi { margin-top: 4px; }
+/* Kredit pembuat di footer & bawah login: terkunci di kode layout(),
+   gaya sama seperti lisensi agar terbaca di wallpaper apa pun. */
+.made-by { color: #14213d; text-align: center; font-size: .82rem; margin: 0;
+  font-weight: 700;
+  text-shadow: 0 1px 0 rgba(255,255,255,.75), 0 0 8px rgba(255,255,255,.65); }
+footer .made-by { margin-top: 4px; }
+.bg-wallpaper ~ .auth-wrap .made-by { background: rgba(255,255,255,.45);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  border-radius: 10px; padding: 4px 14px; }
 
 /* ---------- Mobile (<900px): topbar + bottom nav ---------- */
 @media (max-width: 899px) {
