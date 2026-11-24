@@ -812,6 +812,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/kelas": return self.admin_kelas(user, flash)
             if path.startswith("/admin/kelas/") and path.endswith("/edit"):
                 return self.admin_kelas_edit(user, int(path.split("/")[3]), flash)
+            if (path.startswith("/admin/kelas/") and path.endswith("/template")
+                    and path.split("/")[3].isdigit()):
+                return self.admin_kelas_template(int(path.split("/")[3]))
             if path.startswith("/admin/kelas/") and path.split("/")[3].isdigit():
                 return self.admin_kelas_detail(user, int(path.split("/")[3]), flash)
             if path == "/admin/siswa": return self.admin_siswa(user, qs, flash)
@@ -866,6 +869,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
                                       status=404)
             return self.post_admin_guru_import()
+        if path.startswith("/admin/kelas/") and path.endswith("/import"):
+            if user["role"] != "admin":
+                return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                                      status=404)
+            return self.post_admin_kelas_import(int(path.split("/")[3]))
         if path.startswith("/admin/kelas/") and path.endswith("/wali"):
             if user["role"] != "admin":
                 return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
@@ -3208,6 +3216,17 @@ def _admin_kelas_detail(self, user, kid, flash):
       <label>NIS <input name="kode" required></label>
       <input type="hidden" name="class_id" value="{kelas['id']}">
       <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>
+    <div class="card form-card"><h3>Upload Data Siswa Kelas {esc(kelas["nama"])} dari Excel</h3>
+    <p class="muted">Tambah banyak siswa ke kelas <b>{esc(kelas["nama"])}</b>
+    sekaligus dari file Excel (.xlsx) dengan 2 kolom: <b>Nama | NIS</b>
+    (baris pertama judul kolom). Semua siswa di file ini masuk ke kelas
+    ini &mdash; tidak perlu kolom Kelas. NIS yang sudah terdaftar akan
+    dilewati, tidak digandakan.</p>
+    <p><a class="btn btn-ghost" href="/admin/kelas/{kelas['id']}/template">{icon('download')} Unduh Template Excel Siswa Kelas Ini</a></p>
+    <form method="post" action="/admin/kelas/{kelas['id']}/import" enctype="multipart/form-data">
+      <label>File Excel siswa (.xlsx) <input type="file" name="berkas"
+        accept=".xlsx" required></label>
+      <button type="submit" class="btn btn-primary">Upload &amp; Tambah ke Kelas Ini</button></form></div>
     <p><a href="/admin/kelas">Kembali ke daftar kelas</a></p>"""
     return self.send_html(layout(user, f"Kelas {kelas['nama']}", body, flash,
                                  aktif="kelas"))
@@ -3247,17 +3266,7 @@ def _admin_siswa(self, user, qs, flash):
       <label>Nama <input name="nama" required></label>
       <label>NIS <input name="kode" required></label>
       <label>Kelas <select name="class_id">{class_opts}</select></label>
-      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>
-    <div class="card form-card"><h3>Upload Data Siswa dari Excel</h3>
-    <p class="muted">Tambah banyak siswa sekaligus dari file Excel (.xlsx)
-    dengan 3 kolom: <b>Nama | NIS | Kelas</b> (baris pertama judul kolom).
-    Kelas yang belum ada akan <b>dibuat otomatis</b>. NIS yang sudah
-    terdaftar akan dilewati, tidak digandakan.</p>
-    <p><a class="btn btn-ghost" href="/admin/siswa/template">{icon('download')} Unduh Template Excel Siswa</a></p>
-    <form method="post" action="/admin/siswa/import" enctype="multipart/form-data">
-      <label>File Excel siswa (.xlsx) <input type="file" name="berkas"
-        accept=".xlsx" required></label>
-      <button type="submit" class="btn btn-primary">Upload &amp; Tambah Siswa</button></form></div>"""
+      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>"""
     return self.send_html(layout(user, "Siswa", body, flash, aktif="siswa"))
 
 
@@ -3898,6 +3907,81 @@ def _tambah_guru_conn(conn, nama, mapel):
     return gid
 
 
+def _admin_kelas_template(self, kid):
+    """Template Excel import siswa UNTUK SATU KELAS: hanya 2 kolom
+    Nama | NIS — kelasnya sudah pasti dari halaman kelas yang dibuka."""
+    conn = db()
+    kelas = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
+    conn.close()
+    if not kelas:
+        return self.redirect("/admin/kelas", "Kelas tidak ditemukan.")
+    data = _buat_template_excel(
+        "Data Siswa", ["Nama", "NIS"], [30, 16],
+        [f"Template Import Data Siswa — Kelas {kelas['nama']}",
+         "Isi data siswa mulai baris ke-2 pada lembar 'Data Siswa'.",
+         "Kolom: Nama | NIS. Tidak perlu kolom Kelas: semua siswa di",
+         f"file ini masuk ke kelas {kelas['nama']}.",
+         "Contoh baris: Budi Santoso | 1001",
+         "NIS yang sudah terdaftar akan dilewati (tidak digandakan).",
+         "Simpan sebagai .xlsx, lalu upload di halaman kelas ini."])
+    bersih = re.sub(r"[^\w.\-]+", "_", kelas["nama"]).strip("_") or "kelas"
+    return self.send_bytes(
+        data,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"Template-Siswa-Kelas-{bersih}.xlsx")
+
+
+def _post_admin_kelas_import(self, kid):
+    """Import siswa dari Excel ke SATU kelas (halaman detail kelas):
+    file 2 kolom Nama | NIS; kolom ketiga bila ada diabaikan — kelas
+    selalu kelas halaman ini. NIS duplikat dilewati."""
+    conn = db()
+    kelas = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
+    conn.close()
+    if not kelas:
+        return self.redirect("/admin/kelas", "Kelas tidak ditemukan.")
+    kembali = f"/admin/kelas/{kid}"
+    data, err = _ambil_file_excel(self, kembali)
+    if err is not None:
+        return err
+    try:
+        baris = _baris_excel(data)
+    except Exception:
+        return self.redirect(kembali,
+                             "File tidak bisa dibaca sebagai Excel (.xlsx). "
+                             "Periksa file-nya lalu coba lagi.")
+    conn = db()
+    ditambah = dilewati = 0
+    nis_ada = {r["kode"] for r in conn.execute("SELECT kode FROM students")}
+    for i, row in enumerate(baris):
+        if i == 0:
+            if row and _sel_excel(row[0]).lower() in ("nama", "nama siswa"):
+                continue
+        if i > IMPORT_BARIS_MAKS:
+            break
+        nama = _sel_excel(row[0]) if len(row) > 0 else ""
+        kode = _sel_excel(row[1]) if len(row) > 1 else ""
+        if not nama and not kode:
+            continue
+        if not nama or not kode:
+            dilewati += 1
+            continue
+        if kode in nis_ada:
+            dilewati += 1
+            continue
+        conn.execute("INSERT INTO students (nama, kode, class_id) "
+                     "VALUES (?,?,?)", (nama, kode, kid))
+        nis_ada.add(kode)
+        ditambah += 1
+    conn.commit(); conn.close()
+    pesan = (f"Import siswa kelas {kelas['nama']} selesai: "
+             f"{ditambah} siswa ditambahkan")
+    if dilewati:
+        pesan += (f", {dilewati} baris dilewati (NIS sudah ada / data "
+                  "tidak lengkap)")
+    return self.redirect(kembali, pesan + ".")
+
+
 def _post_admin_guru_import(self):
     data, err = _ambil_file_excel(self, "/admin/guru")
     if err is not None:
@@ -4139,6 +4223,8 @@ Handler.logo_file = _logo_file
 Handler.admin_siswa_template = _admin_siswa_template
 Handler.admin_guru_template = _admin_guru_template
 Handler.post_admin_siswa_import = _post_admin_siswa_import
+Handler.admin_kelas_template = _admin_kelas_template
+Handler.post_admin_kelas_import = _post_admin_kelas_import
 Handler.post_admin_guru_import = _post_admin_guru_import
 Handler.admin_backup = _admin_backup
 Handler.admin_backup_unduh = _admin_backup_unduh
