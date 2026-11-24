@@ -387,6 +387,44 @@ table.tabel.kelola td.aksi { white-space: normal; }
 .kkelas { color: var(--muted); font-size: .9rem; margin-bottom: 6px; }
 .kkode { font-family: ui-monospace, monospace; margin-top: 6px; font-weight: 700; }
 
+/* ---------- Kartu Pelajar: kartu ID 85,6 x 54 mm, kop sekolah di kepala,
+   kotak foto 3x4 (tempel foto), data siswa, QR NIS di kaki. ---------- */
+.lembar-kp { display: flex; flex-wrap: wrap; gap: 14px; }
+.kpelajar { width: 85.6mm; height: 54mm; border-radius: 10px; overflow: hidden;
+  background: #fff; border: 1px solid var(--garis); box-shadow: var(--shadow-sm);
+  page-break-inside: avoid; display: flex; flex-direction: column; font-size: 11px; }
+.kp-head { background: linear-gradient(135deg, var(--indigo), var(--biru));
+  color: #fff; padding: 6px 10px; display: flex; gap: 8px; align-items: center; }
+.kp-head-teks { min-width: 0; }
+.kp-logo { width: 26px; height: 26px; object-fit: contain; background: #fff;
+  border-radius: 6px; padding: 2px; flex: 0 0 auto; }
+.kp-logo-fallback { display: flex; flex: 0 0 auto; }
+.kp-logo-fallback svg { width: 26px; height: 26px; color: #fff; }
+.kp-sekolah { font-weight: 800; font-size: 12px; line-height: 1.15;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kp-alamat { font-size: 8.5px; opacity: .85; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kp-judul { margin-left: auto; font-size: 8px; letter-spacing: 2px; font-weight: 800;
+  color: #fde68a; border: 1px solid rgba(253,230,138,.7); border-radius: 999px;
+  padding: 2px 7px; white-space: nowrap; flex: 0 0 auto; }
+.kp-gold { height: 3px; background: linear-gradient(90deg, #f59e0b, #fde68a, #f59e0b); }
+.kp-body { flex: 1; display: flex; gap: 10px; padding: 8px 10px; min-height: 0; }
+.kp-foto { width: 24mm; flex: 0 0 auto; border: 1.5px dashed #c3c9d6; border-radius: 8px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 8px; line-height: 1.3; text-align: center;
+  background: #f8fafc; }
+.kp-foto svg { width: 20px; height: 20px; }
+.kp-data { flex: 1; min-width: 0; }
+.kp-nama { font-weight: 800; font-size: 13px; line-height: 1.2; }
+.kp-baris { display: flex; gap: 4px; margin-top: 2px; }
+.kp-label { color: var(--muted); width: 52px; flex: 0 0 auto; font-size: 9px;
+  text-transform: uppercase; letter-spacing: .4px; padding-top: 1px; }
+.kp-nilai { font-weight: 650; }
+.kp-foot { display: flex; align-items: center; gap: 8px;
+  border-top: 1px solid var(--garis); padding: 4px 10px; }
+.kp-qr { width: 30px; height: 30px; flex: 0 0 auto; }
+.kp-ket { font-size: 8px; color: var(--muted); line-height: 1.35; }
+
 /* ---------- Pengaturan tampilan ---------- */
 .swatches { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 4px; }
 .swatch { margin: 0; cursor: pointer; }
@@ -507,6 +545,7 @@ footer .made-by { margin-top: 4px; }
   main { max-width: none; padding: 0; }
   .card { box-shadow: none; border: 0; padding: 0; }
   .kartu { box-shadow: none; }
+  .kpelajar { box-shadow: none; }
 }
 
 /* ---------- Tema pastel (Pengaturan Tampilan -> Tema) ----------
@@ -918,3 +957,13 @@ body.tema-senja .kartu,
 body.tema-matcha .kartu,
 body.tema-rose .kartu,
 body.tema-karamel .kartu { border-color: var(--tema-aksen); }
+/* Kartu pelajar ikut palet tema aktif: kepala memakai gradasi aksen tema. */
+body.tema-pastel-pink .kp-head, body.tema-mint .kp-head,
+body.tema-langit .kp-head, body.tema-lilac .kp-head,
+body.tema-krem .kp-head,
+body.tema-lemon .kp-head,
+body.tema-melon .kp-head,
+body.tema-senja .kp-head,
+body.tema-matcha .kp-head,
+body.tema-rose .kp-head,
+body.tema-karamel .kp-head { background: linear-gradient(135deg, var(--tema-aksen), var(--tema-aksen2)); }
