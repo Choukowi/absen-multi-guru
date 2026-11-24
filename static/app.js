@@ -1,4 +1,5 @@
-// Scan QR di gerbang: kamera browser (getUserMedia) + jsQR (CDN).
+// Scan QR di gerbang: kamera browser (getUserMedia) + jsQR (file lokal,
+// static/jsQR.js — aplikasi jalan penuh TANPA internet).
 // Kamera MENYALA TERUS: sekali dinyalakan lewat tombol "Nyalakan Kamera",
 // stream & loop scan berjalan sampai petugas menekan "Matikan Kamera" atau
 // meninggalkan halaman. Setiap QR terbaca dikirim ke /api/scan lewat fetch
