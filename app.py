@@ -10,10 +10,13 @@ Model absen:
   punya kartu QR (siswa: NIS; guru: kode QR guru, mis. G001).
 - Di gerbang, petugas scan QR lewat halaman /scan-gerbang (kamera + jsQR,
   atau ketik kode manual) -> POST /api/scan mencatat kehadiran HARI ITU:
-  scan <= 07:00 = Hadir, 07:01-08:59 = Terlambat (jam dicatat persis).
-- Yang sampai 09:00 belum scan otomatis menjadi Alpa (metode 'auto'),
+  scan <= batas Hadir = Hadir, sesudahnya s.d. sebelum batas Alpa =
+  Terlambat (jam dicatat persis). Batas Hadir & batas Alpa BISA DIEDIT
+  admin di Pengaturan Tampilan > Jam Absensi (bawaan 07:00 & 09:00),
+  karena tiap sekolah jam masuknya beda.
+- Yang sampai batas Alpa belum scan otomatis menjadi Alpa (metode 'auto'),
   terisi saat tabel/dashboard dibuka. Sakit/Izin diisi manual.
-- Scan pukul 09:00 ke atas DITUTUP: orang yang belum punya catatan asli
+- Scan pukul batas Alpa ke atas DITUTUP: orang yang belum punya catatan asli
   hari itu ditolak ("Scan sudah ditutup") dan tetap tercatat Alpa.
 - Tabel mingguan Senin-Sabtu per kelas (siswa) dan untuk guru bisa dilihat
   semua pengguna yang login, dan diunduh sebagai Excel (.xlsx).
@@ -44,9 +47,52 @@ DB_PATH = os.environ.get("ABSEN_DB", os.path.join(BASE_DIR, "data", "absen.db"))
 PORT = int(os.environ.get("PORT", "8000"))
 TZ_JKT = ZoneInfo("Asia/Jakarta")
 
-JAM_BATAS_HADIR = dtime(7, 0)    # scan <= 07:00 -> Hadir
-JAM_BATAS_ALPA = dtime(9, 0)     # >= 09:00 belum scan -> Alpa otomatis
-JAM_PANEL_SELESAI = dtime(17, 0)  # >= 17:00 panel bawah dashboard hilang
+JAM_BATAS_HADIR = dtime(7, 0)    # BAWAAN: scan <= 07:00 -> Hadir
+JAM_BATAS_ALPA = dtime(9, 0)     # BAWAAN: >= 09:00 belum scan -> Alpa otomatis
+JAM_PANEL_SELESAI = dtime(17, 0)  # BAWAAN: >= 17:00 panel bawah dashboard hilang
+# Jam absensi yang BERLAKU dibaca dari tabel settings (kunci
+# 'jam_batas_hadir' / 'jam_batas_alpa' / 'jam_panel_selesai', format
+# 'HH:MM'), bisa diedit admin di Pengaturan Tampilan > Jam Absensi.
+# Nilai kosong/tidak sah -> jam bawaan di atas.
+JAM_DEFAULT_STR = {"jam_batas_hadir": "07:00", "jam_batas_alpa": "09:00",
+                   "jam_panel_selesai": "17:00"}
+
+
+def _parse_jam(teks, bawaan):
+    m = re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", (teks or "").strip())
+    if not m:
+        return bawaan
+    return dtime(int(m.group(1)), int(m.group(2)))
+
+
+def jam_dari_settings(rows):
+    """rows: dict key->value settings. Kembalikan (hadir, alpa, panel)
+    sebagai dtime, dengan bawaan bila kosong/tidak sah."""
+    return (_parse_jam(rows.get("jam_batas_hadir"), JAM_BATAS_HADIR),
+            _parse_jam(rows.get("jam_batas_alpa"), JAM_BATAS_ALPA),
+            _parse_jam(rows.get("jam_panel_selesai"), JAM_PANEL_SELESAI))
+
+
+def jam_absensi(conn=None):
+    """Jam absensi yang berlaku sekarang: (hadir, alpa, panel).
+    Bila conn diberikan, dibaca lewat conn itu (dipakai pastikan_alpa
+    yang sudah memegang koneksi); selain itu buka koneksi sendiri."""
+    try:
+        if conn is not None:
+            rows = {r["key"]: r["value"] for r in conn.execute(
+                "SELECT key, value FROM settings WHERE key IN "
+                "('jam_batas_hadir','jam_batas_alpa','jam_panel_selesai')")}
+            return jam_dari_settings(rows)
+        c = db()
+        try:
+            rows = {r["key"]: r["value"] for r in c.execute(
+                "SELECT key, value FROM settings WHERE key IN "
+                "('jam_batas_hadir','jam_batas_alpa','jam_panel_selesai')")}
+        finally:
+            c.close()
+        return jam_dari_settings(rows)
+    except Exception:
+        return JAM_BATAS_HADIR, JAM_BATAS_ALPA, JAM_PANEL_SELESAI
 STATUS_LIST = ["Hadir", "Terlambat", "Sakit", "Izin", "Alpa"]
 NAMA_HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 NAMA_BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
@@ -266,9 +312,10 @@ def pastikan_alpa(conn, tanggal):
     """Isi Alpa otomatis (metode 'auto') untuk satu tanggal bila sudah waktunya.
 
     Berlaku untuk tanggal Senin-Sabtu yang sudah lewat, atau hari ini bila
-    jam Jakarta sudah >= 09:00. Tidak pernah untuk tanggal masa depan
-    atau hari Minggu. Siswa & guru aktif yang belum punya catatan apa pun
-    pada tanggal itu menjadi Alpa.
+    jam Jakarta sudah >= batas Alpa yang berlaku (pengaturan, bawaan
+    09:00). Tidak pernah untuk tanggal masa depan atau hari Minggu.
+    Siswa & guru aktif yang belum punya catatan apa pun pada tanggal itu
+    menjadi Alpa.
     """
     try:
         d = datetime.strptime(tanggal, "%Y-%m-%d").date()
@@ -279,7 +326,7 @@ def pastikan_alpa(conn, tanggal):
     now = waktu_sekarang()
     if d > now.date():
         return
-    if d == now.date() and now.time() < JAM_BATAS_ALPA:
+    if d == now.date() and now.time() < jam_absensi(conn)[1]:
         return
     conn.execute(
         """INSERT OR IGNORE INTO kehadiran (tanggal, ref_type, ref_id, status, jam, metode, dicatat_oleh)
@@ -460,6 +507,9 @@ def layout(user, title, body, flash="", aktif="", bawah_auth=""):
     lis = lisensi_label()
     lisensi_html = (f'<p class="lisensi">Dilisensikan untuk: {esc(lis)}</p>'
                     if lis else "")
+    # Kredit pembuat: TERKUNCI di kode (bukan settings, tidak bisa
+    # diubah/dihapus dari dalam aplikasi), selalu tampil di footer.
+    made_html = '<p class="made-by">Made by IXOYS Inc</p>'
     if not user:
         return f"""<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
@@ -471,7 +521,7 @@ def layout(user, title, body, flash="", aktif="", bawah_auth=""):
 <div class="auth-brand">{brand_mark(peng)}
 <span class="brand-name">{esc(nama_app)}</span></div>
 {flash_html}{body}</div>
-{bawah_auth}{lisensi_html}<p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>
+{bawah_auth}{lisensi_html}<p class="auth-foot">&copy; {tahun} {esc(nama_app)} &bull; Absensi sekolah dengan QR Code biasa (bukan QRIS pembayaran).</p>{made_html}
 </div><script src="/static/app.js"></script></body></html>"""
     menu_style, nama_kelas_menu = gaya_menu(peng)
     if tema:
@@ -526,7 +576,7 @@ def layout(user, title, body, flash="", aktif="", bawah_auth=""):
 <header class="topbar">{brand_mark(peng, sm=True)}
 <span class="topbar-title">{esc(nama_app)}</span><span class="avatar">{initial}</span></header>
 <main>{flash_html}{body}</main>
-<footer><small>&copy; {tahun} {esc(nama_app)} &bull; Absensi gerbang sekolah &bull; QR Code biasa (bukan QRIS pembayaran)</small>{lisensi_html}</footer>
+<footer><small>&copy; {tahun} {esc(nama_app)} &bull; Absensi gerbang sekolah &bull; QR Code biasa (bukan QRIS pembayaran)</small>{lisensi_html}{made_html}</footer>
 </div>
 <nav class="bottomnav">{bottomnav}</nav>
 </div><script src="/static/app.js"></script></body></html>"""
@@ -769,6 +819,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.admin_siswa_edit(user, int(path.split("/")[3]), flash)
             if path == "/admin/tampilan": return self.admin_tampilan(user, flash)
             if path == "/admin/backup": return self.admin_backup(user, flash)
+            if path == "/admin/siswa/template": return self.admin_siswa_template()
+            if path == "/admin/guru/template": return self.admin_guru_template()
             if path == "/admin/backup/unduh": return self.admin_backup_unduh()
         return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>",
                                      aktif=""), status=404)
@@ -804,6 +856,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
                                       status=404)
             return self.post_admin_backup_pulihkan()
+        if path == "/admin/siswa/import":
+            if user["role"] != "admin":
+                return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                                      status=404)
+            return self.post_admin_siswa_import()
+        if path == "/admin/guru/import":
+            if user["role"] != "admin":
+                return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
+                                      status=404)
+            return self.post_admin_guru_import()
         if path.startswith("/admin/kelas/") and path.endswith("/wali"):
             if user["role"] != "admin":
                 return self.send_html(layout(user, "404", "<p>Halaman tidak ditemukan.</p>"),
@@ -862,6 +924,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.post_admin_tampilan_kejelasan_wp(f)
             if path == "/admin/tampilan/tema":
                 return self.post_admin_tampilan_tema(f)
+            if path == "/admin/tampilan/jam-absen":
+                return self.post_admin_tampilan_jam_absen(f)
             if path == "/admin/tampilan/wallpaper/hapus":
                 return self.post_admin_tampilan_wallpaper_hapus()
             if path == "/admin/tampilan/logo/hapus":
@@ -986,8 +1050,9 @@ class Handler(BaseHTTPRequestHandler):
         # halaman /laporan/siswa & /laporan/guru tetap bisa dibuka,
         # hanya panel dashboard-nya yang disembunyikan. Kartu statistik
         # TIDAK ikut berubah: tetap nilai reset sesudah 17:00.
-        sudah_sembilan = now.time() >= JAM_BATAS_ALPA
-        panel_selesai = now.time() >= JAM_PANEL_SELESAI
+        jam_hadir, jam_alpa, jam_panel = jam_absensi(conn)
+        sudah_sembilan = now.time() >= jam_alpa
+        panel_selesai = now.time() >= jam_panel
         if user["role"] == "guru":
             # Wali kelas: panel Laporan Hari Ini (kartu yang bisa diklik)
             # TIDAK tampil untuk wali — halaman laporannya sendiri juga
@@ -1096,7 +1161,7 @@ class Handler(BaseHTTPRequestHandler):
         </div>"""
         body = f"""<h2>Dashboard</h2>
         <p class="muted">{esc(NAMA_HARI[today.weekday()])}, {esc(fmt_tanggal(today))} &bull;
-        batas Hadir {JAM_BATAS_HADIR.strftime('%H:%M')}, Alpa otomatis {JAM_BATAS_ALPA.strftime('%H:%M')}</p>
+        batas Hadir {jam_hadir.strftime('%H:%M')}, Alpa otomatis {jam_alpa.strftime('%H:%M')}</p>
         {warn}{kartu_cari}
         <div class="stat-grid">{cards}</div>
         {kartu_cepat}
@@ -1253,9 +1318,10 @@ class Handler(BaseHTTPRequestHandler):
             hasil_html = (f'<div class="hasil hasil-{hasil["jenis"]}">'
                           f'<div class="hasil-nama">{esc(hasil["judul"])}</div>'
                           f'<div class="hasil-meta">{esc(hasil["pesan"])}</div></div>')
+        _jh, _ja, _jp = jam_absensi()
         body = f"""<h2>Scan Gerbang</h2>
         <p class="muted">{esc(NAMA_HARI[now.weekday()])}, {esc(fmt_tanggal(now.date()))} &bull;
-        pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; 07:00 = Hadir, lewat = Terlambat, scan ditutup 09:00</p>
+        pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; {_jh.strftime('%H:%M')} = Hadir, lewat = Terlambat, scan ditutup {_ja.strftime('%H:%M')}</p>
         <div id="hasilScan">{hasil_html}</div>
         <section class="card scan-card">
           <div class="scan-frame"><video id="cam" autoplay playsinline muted></video></div>
@@ -1330,11 +1396,12 @@ class Handler(BaseHTTPRequestHandler):
         # diubah apa pun, Alpa otomatisnya tetap berdiri. Yang sudah
         # tercatat asli (scan atau manual) tetap jatuh ke cabang-cabang
         # "Sudah tercatat" di bawah seperti biasa.
-        if now.time() >= JAM_BATAS_ALPA and (ada is None or ada["metode"] == "auto"):
+        jam_hadir_s, jam_alpa_s, _jp_s = jam_absensi(conn)
+        if now.time() >= jam_alpa_s and (ada is None or ada["metode"] == "auto"):
             conn.close()
             return {
                 "jenis": "error", "judul": "Scan sudah ditutup",
-                "pesan": f"Scan sudah ditutup (lewat jam 09.00). "
+                "pesan": f"Scan sudah ditutup (lewat jam {jam_alpa_s.strftime('%H.%M')}). "
                          f"{nama} tetap tercatat Alpa hari ini."}
         if ada:
             if ada["metode"] == "scan":
@@ -1356,7 +1423,7 @@ class Handler(BaseHTTPRequestHandler):
             # catatan scan di bawah. (Sesudah 09:00 kasus ini sudah
             # ditolak oleh pemeriksaan "Scan sudah ditutup" di atas.)
             conn.execute("DELETE FROM kehadiran WHERE id=?", (ada["id"],))
-        status = "Hadir" if now.time() <= JAM_BATAS_HADIR else "Terlambat"
+        status = "Hadir" if now.time() <= jam_hadir_s else "Terlambat"
         conn.execute(
             """INSERT INTO kehadiran (tanggal, ref_type, ref_id, status, jam, metode, dicatat_oleh)
                VALUES (?,?,?,?,?,'scan',?)""",
@@ -2050,7 +2117,10 @@ WALLPAPER_NAMA_RE = re.compile(r"^[0-9a-f]{24}\.(jpg|jpeg|png|webp)$")
 def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
     peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": "",
-            "warna_menu": "", "kejelasan_wp": "", "tema": ""}
+            "warna_menu": "", "kejelasan_wp": "", "tema": "",
+            "jam_batas_hadir": JAM_DEFAULT_STR["jam_batas_hadir"],
+            "jam_batas_alpa": JAM_DEFAULT_STR["jam_batas_alpa"],
+            "jam_panel_selesai": JAM_DEFAULT_STR["jam_panel_selesai"]}
     try:
         conn = db()
         for r in conn.execute("SELECT key, value FROM settings").fetchall():
@@ -2069,6 +2139,11 @@ def get_pengaturan():
     peng["tema"] = (peng["tema"] or "").strip().lower()
     if peng["tema"] not in TEMA:
         peng["tema"] = ""
+    for _k in ("jam_batas_hadir", "jam_batas_alpa", "jam_panel_selesai"):
+        if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", (peng[_k] or "").strip()):
+            peng[_k] = JAM_DEFAULT_STR[_k]
+        else:
+            peng[_k] = peng[_k].strip()
     if peng["wallpaper"] and not WALLPAPER_NAMA_RE.match(peng["wallpaper"]):
         peng["wallpaper"] = ""
     if peng["logo"] and not WALLPAPER_NAMA_RE.match(peng["logo"]):
@@ -2577,7 +2652,16 @@ def _admin_guru(self, user, flash):
       <p class="muted"><small>Guru di sini adalah data induk (nama + mapel).
       Login dibuat otomatis hanya saat guru ditunjuk sebagai wali kelas
       di menu Kelola Kelas.</small></p>
-      <button type="submit" class="btn btn-primary">Tambah Guru</button></form></div>"""
+      <button type="submit" class="btn btn-primary">Tambah Guru</button></form></div>
+    <div class="card form-card"><h3>Upload Data Guru dari Excel</h3>
+    <p class="muted">Tambah banyak guru sekaligus dari file Excel (.xlsx)
+    dengan 2 kolom: <b>Nama | Mata Pelajaran</b> (baris pertama judul kolom).
+    Guru dengan nama yang sudah terdaftar akan dilewati, tidak digandakan.</p>
+    <p><a class="btn btn-ghost" href="/admin/guru/template">{icon('download')} Unduh Template Excel Guru</a></p>
+    <form method="post" action="/admin/guru/import" enctype="multipart/form-data">
+      <label>File Excel guru (.xlsx) <input type="file" name="berkas"
+        accept=".xlsx" required></label>
+      <button type="submit" class="btn btn-primary">Upload &amp; Tambah Guru</button></form></div>"""
     return self.send_html(layout(user, "Guru", body, flash, aktif="guru"))
 
 
@@ -3163,7 +3247,17 @@ def _admin_siswa(self, user, qs, flash):
       <label>Nama <input name="nama" required></label>
       <label>NIS <input name="kode" required></label>
       <label>Kelas <select name="class_id">{class_opts}</select></label>
-      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>"""
+      <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>
+    <div class="card form-card"><h3>Upload Data Siswa dari Excel</h3>
+    <p class="muted">Tambah banyak siswa sekaligus dari file Excel (.xlsx)
+    dengan 3 kolom: <b>Nama | NIS | Kelas</b> (baris pertama judul kolom).
+    Kelas yang belum ada akan <b>dibuat otomatis</b>. NIS yang sudah
+    terdaftar akan dilewati, tidak digandakan.</p>
+    <p><a class="btn btn-ghost" href="/admin/siswa/template">{icon('download')} Unduh Template Excel Siswa</a></p>
+    <form method="post" action="/admin/siswa/import" enctype="multipart/form-data">
+      <label>File Excel siswa (.xlsx) <input type="file" name="berkas"
+        accept=".xlsx" required></label>
+      <button type="submit" class="btn btn-primary">Upload &amp; Tambah Siswa</button></form></div>"""
     return self.send_html(layout(user, "Siswa", body, flash, aktif="siswa"))
 
 
@@ -3293,6 +3387,25 @@ def _admin_tampilan(self, user, flash):
           onsubmit="return confirm('Hapus logo sekolah? Brand kembali ke ikon bawaan.')">
           <button type="submit" class="btn btn-danger">Hapus Logo</button></form>"""
     body = f"""<h2>Pengaturan Tampilan</h2>
+    <div class="card form-card"><h3>Jam Absensi</h3>
+    <p class="muted">Jam masuk tiap sekolah bisa berbeda, jadi batas jam ini
+    bisa diubah. Scan sampai Batas Hadir masih dihitung <b>Hadir</b>; lewat itu
+    sampai sebelum Batas Alpa dihitung <b>Terlambat</b>; yang belum scan saat
+    Batas Alpa tercapai menjadi <b>Alpa otomatis</b> dan scan sesudahnya ditutup.
+    Panel Laporan Hari Ini di dashboard tampil mulai Batas Alpa dan hilang
+    mulai jam Panel Laporan selesai.</p>
+    <form method="post" action="/admin/tampilan/jam-absen">
+      <label>Batas Hadir
+        <input type="time" name="jam_batas_hadir" value="{esc(peng['jam_batas_hadir'])}" required></label>
+      <label>Batas Alpa otomatis &amp; scan ditutup
+        <input type="time" name="jam_batas_alpa" value="{esc(peng['jam_batas_alpa'])}" required></label>
+      <label>Panel Laporan Hari Ini hilang mulai
+        <input type="time" name="jam_panel_selesai" value="{esc(peng['jam_panel_selesai'])}" required></label>
+      <p class="muted"><small>Urutannya harus: Batas Hadir lebih awal dari
+      Batas Alpa, dan Batas Alpa lebih awal dari jam panel selesai.
+      Perubahan langsung berlaku untuk scan, Alpa otomatis, dan dashboard
+      &mdash; tanpa perlu memasang ulang aplikasi.</small></p>
+      <button type="submit" class="btn btn-primary">Simpan Jam Absensi</button></form></div>
     <div class="card form-card"><h3>Tema</h3>
     <p class="muted">Tema pastel membuat tampilan lebih lembut: latar
     berwarna pastel, sudut kartu lebih bulat, dan aksen gradasi.
@@ -3415,6 +3528,36 @@ def _post_admin_tampilan_tema(self, f):
     set_pengaturan(conn, "tema", slug)
     conn.commit(); conn.close()
     return self.redirect("/admin/tampilan", "Tema disimpan.")
+
+
+def _post_admin_tampilan_jam_absen(self, f):
+    """Simpan jam absensi yang bisa diedit admin (permintaan user:
+    tidak semua sekolah masuk jam yang sama). Tiga jam 'HH:MM' sah dan
+    urutannya wajib hadir < alpa < panel selesai; selain itu ditolak
+    dan pengaturan lama tidak berubah."""
+    hadir = (f.get("jam_batas_hadir") or "").strip()
+    alpa = (f.get("jam_batas_alpa") or "").strip()
+    panel = (f.get("jam_panel_selesai") or "").strip()
+    pola = r"^([01]\d|2[0-3]):[0-5]\d$"
+    if not (re.match(pola, hadir) and re.match(pola, alpa)
+            and re.match(pola, panel)):
+        return self.redirect("/admin/tampilan",
+                             "Jam absensi tidak valid; pengaturan tidak berubah.")
+    if not (hadir < alpa < panel):
+        return self.redirect(
+            "/admin/tampilan",
+            "Urutan jam salah: Batas Hadir harus lebih awal dari Batas "
+            "Alpa, dan Batas Alpa lebih awal dari jam panel selesai. "
+            "Pengaturan tidak berubah.")
+    conn = db()
+    set_pengaturan(conn, "jam_batas_hadir", hadir)
+    set_pengaturan(conn, "jam_batas_alpa", alpa)
+    set_pengaturan(conn, "jam_panel_selesai", panel)
+    conn.commit(); conn.close()
+    return self.redirect(
+        "/admin/tampilan",
+        f"Jam absensi disimpan: batas Hadir {hadir}, Alpa otomatis "
+        f"{alpa}, panel laporan hilang {panel}.")
 
 
 # Header cache untuk berkas gambar unggahan (wallpaper & logo): nama berkas
@@ -3576,6 +3719,224 @@ def _logo_file(self, nama):
     # Logo & wallpaper sama-sama berkas unggahan bernama-token di data/uploads/,
     # jadi penyajiannya identik dengan wallpaper.
     return _wallpaper_file(self, nama)
+
+
+# -- admin: import data dari Excel (siswa & guru) ------------------------------
+IMPORT_MAKS = 5 * 1024 * 1024  # batas ukuran file Excel import
+IMPORT_BARIS_MAKS = 2000       # batas baris data per file import
+
+
+def _sel_excel(v):
+    """Nilai sel Excel -> teks rapi: kosong -> '', angka bulat (NIS yang
+    diketik sebagai angka) -> tanpa ',0', selain itu str apa adanya."""
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    if isinstance(v, int):
+        return str(v)
+    return str(v).strip()
+
+
+def _ambil_file_excel(self, kembali):
+    """Baca file .xlsx dari form multipart import. Kembalikan
+    (data_bytes, None) bila sah, atau (None, respon_redirect) bila tidak."""
+    length = int(self.headers.get("Content-Length", "0") or "0")
+    if length > IMPORT_MAKS + 1024 * 1024:
+        return None, self.redirect(kembali, "File terlalu besar (maks 5 MB).")
+    body = self.rfile.read(length) if length else b""
+    _fields, files = parse_multipart(body, self.headers.get("Content-Type", ""))
+    berkas = files.get("berkas")
+    if not berkas or not berkas[0]:
+        return None, self.redirect(kembali, "Pilih file Excel dulu.")
+    nama_file, data = berkas
+    if not nama_file.lower().endswith(".xlsx"):
+        return None, self.redirect(
+            kembali, "Format file harus .xlsx (Excel). Simpan ulang file-nya "
+                     "sebagai .xlsx lalu coba lagi.")
+    if len(data) > IMPORT_MAKS:
+        return None, self.redirect(kembali, "File terlalu besar (maks 5 MB).")
+    return data, None
+
+
+def _baris_excel(data):
+    """Buka .xlsx -> list baris (tuple nilai sel) dari lembar pertama.
+    Melempar Exception bila file bukan Excel yang bisa dibaca."""
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    ws = wb.active
+    return [tuple(r) for r in ws.iter_rows(values_only=True)]
+
+
+def _buat_template_excel(judul_sheet, kolom, lebar, petunjuk):
+    """Template .xlsx import: lembar data berisi HANYA baris judul kolom
+    (ber-gaya seperti ekspor lain) + lembar Petunjuk berisi format &
+    contoh, supaya contoh tidak ikut ter-import sebagai data."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    ws = wb.active
+    ws.title = judul_sheet
+    tipis = Side(style="thin", color="9AA3B2")
+    border = Border(left=tipis, right=tipis, top=tipis, bottom=tipis)
+    fill_head = PatternFill("solid", fgColor="203764")
+    font_head = Font(bold=True, color="FFFFFF", size=11)
+    for j, h in enumerate(kolom, start=1):
+        c = ws.cell(row=1, column=j, value=h)
+        c.fill = fill_head; c.font = font_head; c.border = border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(j)].width = lebar[j - 1]
+    ws2 = wb.create_sheet("Petunjuk")
+    for i, baris in enumerate(petunjuk, start=1):
+        c = ws2.cell(row=i, column=1, value=baris)
+        if i == 1:
+            c.font = Font(bold=True, size=12)
+    ws2.column_dimensions["A"].width = 90
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _admin_siswa_template(self):
+    data = _buat_template_excel(
+        "Data Siswa", ["Nama", "NIS", "Kelas"], [30, 16, 16],
+        ["Template Import Data Siswa",
+         "Isi data siswa mulai baris ke-2 pada lembar 'Data Siswa'.",
+         "Kolom: Nama | NIS | Kelas (nama kelas, mis. 1A).",
+         "Contoh baris: Budi Santoso | 1001 | 1A",
+         "Kelas yang belum ada akan dibuat otomatis saat upload.",
+         "NIS yang sudah terdaftar akan dilewati (tidak digandakan).",
+         "Simpan sebagai .xlsx, lalu upload di menu Kelola Siswa."])
+    return self.send_bytes(
+        data,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="Template-Siswa.xlsx")
+
+
+def _admin_guru_template(self):
+    data = _buat_template_excel(
+        "Data Guru", ["Nama", "Mata Pelajaran"], [30, 24],
+        ["Template Import Data Guru",
+         "Isi data guru mulai baris ke-2 pada lembar 'Data Guru'.",
+         "Kolom: Nama | Mata Pelajaran (mis. Matematika).",
+         "Contoh baris: Ibu Ani Wijaya | Matematika",
+         "Guru dengan nama yang sudah terdaftar akan dilewati.",
+         "Simpan sebagai .xlsx, lalu upload di menu Kelola Guru."])
+    return self.send_bytes(
+        data,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="Template-Guru.xlsx")
+
+
+def _post_admin_siswa_import(self):
+    data, err = _ambil_file_excel(self, "/admin/siswa")
+    if err is not None:
+        return err
+    try:
+        baris = _baris_excel(data)
+    except Exception:
+        return self.redirect("/admin/siswa",
+                             "File tidak bisa dibaca sebagai Excel (.xlsx). "
+                             "Periksa file-nya lalu coba lagi.")
+    conn = db()
+    ditambah = dilewati = kelas_baru = 0
+    nis_ada = {r["kode"] for r in conn.execute("SELECT kode FROM students")}
+    kelas_peta = {}
+    for r in conn.execute("SELECT id, nama FROM classes"):
+        kelas_peta[r["nama"].strip().lower()] = r["id"]
+    for i, row in enumerate(baris):
+        if i == 0:
+            # Baris judul kolom template: lewati bila sel pertamanya 'nama'.
+            if row and _sel_excel(row[0]).lower() in ("nama", "nama siswa"):
+                continue
+        if i > IMPORT_BARIS_MAKS:
+            break
+        nama = _sel_excel(row[0]) if len(row) > 0 else ""
+        kode = _sel_excel(row[1]) if len(row) > 1 else ""
+        kelas_nama = _sel_excel(row[2]) if len(row) > 2 else ""
+        if not nama and not kode and not kelas_nama:
+            continue  # baris kosong: abaikan diam-diam
+        if not nama or not kode or not kelas_nama:
+            dilewati += 1
+            continue
+        if kode in nis_ada:
+            dilewati += 1
+            continue
+        kunci = kelas_nama.lower()
+        if kunci not in kelas_peta:
+            cur = conn.execute("INSERT INTO classes (nama) VALUES (?)",
+                               (kelas_nama,))
+            kelas_peta[kunci] = cur.lastrowid
+            kelas_baru += 1
+        conn.execute("INSERT INTO students (nama, kode, class_id) "
+                     "VALUES (?,?,?)", (nama, kode, kelas_peta[kunci]))
+        nis_ada.add(kode)
+        ditambah += 1
+    conn.commit(); conn.close()
+    pesan = f"Import siswa selesai: {ditambah} siswa ditambahkan"
+    if kelas_baru:
+        pesan += f", {kelas_baru} kelas baru dibuat"
+    if dilewati:
+        pesan += (f", {dilewati} baris dilewati (NIS sudah ada / data "
+                  "tidak lengkap)")
+    return self.redirect("/admin/siswa", pesan + ".")
+
+
+def _tambah_guru_conn(conn, nama, mapel):
+    """Buat satu guru (data induk) persis seperti Tambah Guru manual:
+    username penanda diganti 'guru-<id>' + kode QR otomatis; login
+    sungguhan lahir hanya lewat penunjukan wali kelas."""
+    ph, salt = hash_password(secrets.token_urlsafe(24))
+    cur = conn.execute(
+        "INSERT INTO users (username,password_hash,salt,role,nama,mapel) "
+        "VALUES (?,?,?,'guru',?,?)",
+        ("baru-" + secrets.token_hex(8), ph, salt, nama, mapel))
+    gid = cur.lastrowid
+    conn.execute("UPDATE users SET username=?, kode_qr=? WHERE id=?",
+                 (f"guru-{gid}", kode_qr_guru_baru(conn, gid), gid))
+    return gid
+
+
+def _post_admin_guru_import(self):
+    data, err = _ambil_file_excel(self, "/admin/guru")
+    if err is not None:
+        return err
+    try:
+        baris = _baris_excel(data)
+    except Exception:
+        return self.redirect("/admin/guru",
+                             "File tidak bisa dibaca sebagai Excel (.xlsx). "
+                             "Periksa file-nya lalu coba lagi.")
+    conn = db()
+    ditambah = dilewati = 0
+    nama_ada = {(r["nama"] or "").strip().lower() for r in conn.execute(
+        "SELECT nama FROM users WHERE role='guru'")}
+    for i, row in enumerate(baris):
+        if i == 0:
+            if row and _sel_excel(row[0]).lower() in ("nama", "nama guru"):
+                continue
+        if i > IMPORT_BARIS_MAKS:
+            break
+        nama = _sel_excel(row[0]) if len(row) > 0 else ""
+        mapel = _sel_excel(row[1]) if len(row) > 1 else ""
+        if not nama and not mapel:
+            continue
+        if not nama:
+            dilewati += 1
+            continue
+        if nama.lower() in nama_ada:
+            dilewati += 1
+            continue
+        _tambah_guru_conn(conn, nama, mapel)
+        nama_ada.add(nama.lower())
+        ditambah += 1
+    conn.commit(); conn.close()
+    pesan = f"Import guru selesai: {ditambah} guru ditambahkan"
+    if dilewati:
+        pesan += (f", {dilewati} baris dilewati (nama sudah ada / data "
+                  "tidak lengkap)")
+    return self.redirect("/admin/guru", pesan + ".")
 
 
 # -- admin: backup & pulihkan --------------------------------------------------
@@ -3768,12 +4129,17 @@ Handler.post_admin_tampilan = _post_admin_tampilan
 Handler.post_admin_tampilan_warna_menu = _post_admin_tampilan_warna_menu
 Handler.post_admin_tampilan_kejelasan_wp = _post_admin_tampilan_kejelasan_wp
 Handler.post_admin_tampilan_tema = _post_admin_tampilan_tema
+Handler.post_admin_tampilan_jam_absen = _post_admin_tampilan_jam_absen
 Handler.post_admin_tampilan_wallpaper = _post_admin_tampilan_wallpaper
 Handler.post_admin_tampilan_wallpaper_hapus = _post_admin_tampilan_wallpaper_hapus
 Handler.wallpaper_file = _wallpaper_file
 Handler.post_admin_tampilan_logo = _post_admin_tampilan_logo
 Handler.post_admin_tampilan_logo_hapus = _post_admin_tampilan_logo_hapus
 Handler.logo_file = _logo_file
+Handler.admin_siswa_template = _admin_siswa_template
+Handler.admin_guru_template = _admin_guru_template
+Handler.post_admin_siswa_import = _post_admin_siswa_import
+Handler.post_admin_guru_import = _post_admin_guru_import
 Handler.admin_backup = _admin_backup
 Handler.admin_backup_unduh = _admin_backup_unduh
 Handler.post_admin_backup_pulihkan = _post_admin_backup_pulihkan
