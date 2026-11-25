@@ -2116,9 +2116,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _kartu_belakang_html(self, peng, jenis):
         """Sisi belakang kartu pelajar / kartu guru: kepala kop sekolah,
-        5 tata tertib penggunaan kartu, baris masa berlaku 3 tahun, dan
-        blok tanda tangan Kepala Sekolah. 'jenis' = 'siswa' atau 'guru'
-        (aturan 1, 4, 5 berbeda)."""
+        5 tata tertib penggunaan kartu, baris masa berlaku, dan blok
+        tanda tangan Kepala Sekolah. 'jenis' = 'siswa' atau 'guru'
+        (aturan 1, 4, 5 berbeda; masa berlaku guru 'Selama masa bakti',
+        siswa 3 tahun)."""
         nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
         alamat = (peng["kop_alamat"] or "").strip()
         telp = (peng["kop_telepon"] or "").strip()
@@ -2148,6 +2149,12 @@ class Handler(BaseHTTPRequestHandler):
                 "Bila hilang atau rusak, segera lapor ke wali kelas.",
                 "Kartu tidak boleh dipindahtangankan ke siswa lain."]
         items = "".join(f"<li>{esc(a)}</li>" for a in aturan)
+        if jenis == "guru":
+            # Kartu Guru v4 (perintah Bos 25 Nov 2026): masa berlaku kartu
+            # guru "Selama masa bakti", bukan 3 tahun seperti kartu pelajar.
+            masa_html = "Masa Berlaku<br>Selama masa bakti"
+        else:
+            masa_html = esc(belakang)
         kelas_belakang = "kpelajar kp-belakang" + (" kp-guru" if jenis == "guru" else "")
         return f"""<div class="{kelas_belakang}">
           <div class="kp-b-head">{logo_html}<div class="kp-b-teks">
@@ -2158,7 +2165,7 @@ class Handler(BaseHTTPRequestHandler):
             <ol class="kp-tata">{items}</ol>
           </div>
           <div class="kp-b-foot">
-            <div class="kp-b-masa">{esc(belakang)}</div>
+            <div class="kp-b-masa">{masa_html}</div>
             <div class="kp-b-ttd"><div>Kepala Sekolah,</div>
             <div class="kp-ttd-kosong"></div><div>( ........................ )</div></div>
           </div>
