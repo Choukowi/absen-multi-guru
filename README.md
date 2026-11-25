@@ -51,7 +51,9 @@ Ini proyek kode mandiri yang bisa di-deploy sendiri.
   data guru (menu Kartu Guru). Desain sama dengan Kartu Pelajar tapi
   kepala & belakang **hijau zamrud + emas** supaya langsung beda:
   nama/Jabatan (Guru)/Guru Pelajaran (mata pelajaran)/Jenis Kelamin,
-  QR = kode_qr asli guru untuk scan di gerbang. Wali kelas hanya
+  QR = kode_qr asli guru untuk scan di gerbang. Sisi belakang: 5 tata
+  tertib + "Masa Berlaku — Selama masa bakti" + tanda tangan Kepala
+  Sekolah. Wali kelas hanya
   melihat kartunya sendiri.
 - **Tahun Ajaran** (Pengaturan Tampilan): kolom input "Tahun Ajaran"
   (mis. 2026/2027) yang dipakai kartu sebagai Tahun Ajaran dan untuk
