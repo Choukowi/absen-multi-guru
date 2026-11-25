@@ -417,13 +417,41 @@ table.tabel.kelola td.aksi { white-space: normal; }
 .kp-data { flex: 1; min-width: 0; }
 .kp-nama { font-weight: 800; font-size: 13px; line-height: 1.2; }
 .kp-baris { display: flex; gap: 4px; margin-top: 2px; }
-.kp-label { color: var(--muted); width: 52px; flex: 0 0 auto; font-size: 9px;
+.kp-label { color: var(--muted); width: 64px; flex: 0 0 auto; font-size: 9px;
   text-transform: uppercase; letter-spacing: .4px; padding-top: 1px; }
 .kp-nilai { font-weight: 650; }
 .kp-foot { display: flex; align-items: center; gap: 8px;
   border-top: 1px solid var(--garis); padding: 4px 10px; }
 .kp-qr { width: 30px; height: 30px; flex: 0 0 auto; }
 .kp-ket { font-size: 8px; color: var(--muted); line-height: 1.35; }
+
+/* ---------- Sisi belakang kartu pelajar / kartu guru: navy gelap,
+   kepala kop sekolah, 5 tata tertib, masa berlaku, tanda tangan. ---------- */
+.kpelajar.kp-belakang { background: linear-gradient(160deg, #0a1944, #16295c);
+  color: #fff; border-color: #0a1944; }
+.kp-b-head { display: flex; gap: 8px; align-items: center; padding: 5px 10px 4px; }
+.kp-b-head .kp-logo { width: 22px; height: 22px; }
+.kp-b-head .kp-logo-fallback svg { width: 22px; height: 22px; }
+.kp-b-teks { min-width: 0; }
+.kp-b-sekolah { font-weight: 800; font-size: 10px; line-height: 1.15;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kp-b-kontak { font-size: 7.5px; opacity: .85; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kp-b-body { flex: 1; padding: 4px 10px 2px; min-height: 0; }
+.kp-b-judul { font-size: 8px; font-weight: 800; letter-spacing: 1px; color: #fde68a;
+  border-bottom: 1px solid rgba(253,230,138,.5); padding-bottom: 2px; margin-bottom: 3px; }
+.kp-tata { margin: 0; padding-left: 13px; font-size: 7.5px; line-height: 1.4; }
+.kp-tata li { margin-top: 1px; }
+.kp-b-foot { display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 8px; padding: 3px 10px 5px; border-top: 1px solid rgba(255,255,255,.25); }
+.kp-b-masa { font-size: 7.5px; line-height: 1.35; font-weight: 650; }
+.kp-b-ttd { font-size: 7.5px; line-height: 1.3; text-align: right; flex: 0 0 auto; }
+.kp-ttd-kosong { height: 9px; }
+/* Kartu Guru v3: kepala & belakang hijau zamrud + emas, supaya langsung
+   beda dari Kartu Pelajar (navy/emas). Spesifisitas mengalahkan aturan
+   tema pastel di bawah (body.tema-* .kp-head). */
+.kpelajar.kp-guru .kp-head { background: linear-gradient(135deg, #065f46, #059669); }
+.kpelajar.kp-belakang.kp-guru { background: linear-gradient(160deg, #022c22, #065f46); }
 
 /* ---------- Pengaturan tampilan ---------- */
 .swatches { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 4px; }
