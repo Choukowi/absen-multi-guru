@@ -173,6 +173,8 @@ CREATE TABLE IF NOT EXISTS users (
     kode_qr TEXT,
     no_wa TEXT DEFAULT '',          -- nomor WhatsApp guru (kolom No WA di
                                     -- Kelola Guru + tombol Kirim Password via WA)
+    jenis_kelamin TEXT DEFAULT '',  -- 'Laki-laki' / 'Perempuan' (tampil di
+                                    -- Kartu Guru v3); '' = belum diisi
     pass_sementara TEXT DEFAULT ''  -- password guru (wali) yang SEDANG berlaku,
                                     -- teks biasa KHUSUS tampilan admin di Kelola
                                     -- Guru; login tetap diperiksa via hash PBKDF2
@@ -186,7 +188,9 @@ CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nama TEXT NOT NULL,
     kode TEXT UNIQUE NOT NULL,          -- NIS siswa (isi QR kartunya)
-    class_id INTEGER NOT NULL REFERENCES classes(id)
+    class_id INTEGER NOT NULL REFERENCES classes(id),
+    jenis_kelamin TEXT DEFAULT ''       -- 'Laki-laki' / 'Perempuan' (tampil di
+                                        -- Kartu Pelajar v3); '' = belum diisi
 );
 CREATE TABLE IF NOT EXISTS kehadiran (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -288,6 +292,11 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN pass_sementara TEXT DEFAULT ''")
     if "no_wa" not in kolom_users:
         conn.execute("ALTER TABLE users ADD COLUMN no_wa TEXT DEFAULT ''")
+    if "jenis_kelamin" not in kolom_users:
+        conn.execute("ALTER TABLE users ADD COLUMN jenis_kelamin TEXT DEFAULT ''")
+    kolom_siswa = {r["name"] for r in conn.execute("PRAGMA table_info(students)")}
+    if "jenis_kelamin" not in kolom_siswa:
+        conn.execute("ALTER TABLE students ADD COLUMN jenis_kelamin TEXT DEFAULT ''")
     # Model "login hanya wali kelas": classes.wali_id menunjuk guru (users.id)
     # yang menjadi wali kelas itu. NULL = belum ada wali (guru belum bisa login).
     kolom_kelas = {r["name"] for r in conn.execute("PRAGMA table_info(classes)")}
@@ -454,6 +463,7 @@ def nav_items(user):
                 ("tabel-siswa", "/tabel-siswa", "Tabel Siswa", "users"),
                 ("cetak", "/cetak", "Cetak Kartu", "printer"),
                 ("kartu-pelajar", "/kartu-pelajar", "Kartu Pelajar", "cap"),
+                ("kartu-guru", "/kartu-guru", "Kartu Guru", "badge"),
                 ("ganti-password", "/ganti-password", "Ganti Password", "key")]
     items = [("dashboard", "/dashboard", "Dashboard", "grid"),
              ("scan", "/scan-gerbang", "Scan Gerbang", "scan"),
@@ -467,6 +477,7 @@ def nav_items(user):
                   ("backup", "/admin/backup", "Backup & Pulihkan", "download")]
     items += [("cetak", "/cetak", "Cetak Kartu", "printer"),
               ("kartu-pelajar", "/kartu-pelajar", "Kartu Pelajar", "cap"),
+              ("kartu-guru", "/kartu-guru", "Kartu Guru", "badge"),
               ("ganti-password", "/ganti-password", "Ganti Password", "key")]
     return items
 
@@ -818,6 +829,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.kartu_pelajar_kelas(user, int(path.split("/")[3]), flash)
         if path.startswith("/kartu-pelajar/siswa/"):
             return self.kartu_pelajar_siswa(user, int(path.split("/")[3]), flash)
+        if path == "/kartu-guru":
+            return self.kartu_guru_index(user, flash)
+        if path.startswith("/kartu-guru/guru/"):
+            return self.kartu_guru_satu(user, int(path.split("/")[3]), flash)
         if user["role"] == "admin":
             if path == "/admin/guru": return self.admin_guru(user, flash)
             if path.startswith("/admin/guru/") and path.endswith("/edit"):
@@ -2060,19 +2075,16 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
 
     def _kartu_pelajar_html(self, st, kelas_nama, wali_nama, peng):
-        """Satu kartu pelajar (ukuran kartu ID 85,6 x 54 mm): kepala kop
-        sekolah (logo + nama + alamat), kotak foto 3x4 (aplikasi belum
-        menyimpan foto siswa, jadi kotaknya untuk tempel foto), data siswa
-        (nama, NIS, kelas, wali kelas), dan kaki berisi QR NIS + kontak
-        sekolah dari kop."""
+        """Satu kartu pelajar (ukuran kartu ID 85,6 x 54 mm, desain v3):
+        kepala kop sekolah (logo + nama + alamat), kotak foto 3x4
+        (aplikasi belum menyimpan foto siswa, jadi kotaknya untuk tempel
+        foto), data siswa (nama, NIS, Tahun Ajaran dari Pengaturan,
+        Jenis Kelamin), dan kaki berisi QR NIS. TANPA kolom Kelas dan
+        TANPA Masa Berlaku di depan — sesuai desain Kartu Pelajar v3
+        yang disetujui Bos (25 Nov 2026). kelas_nama/wali_nama tidak
+        lagi tercetak di kartu (kelas tetap tampil di judul halaman)."""
         nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
         alamat = (peng["kop_alamat"] or "").strip()
-        telp = (peng["kop_telepon"] or "").strip()
-        email = (peng["kop_email"] or "").strip()
-        kontak = " &bull; ".join(x for x in
-                                 ([esc(alamat)] if alamat else []) +
-                                 ([f"Telp: {esc(telp)}"] if telp else []) +
-                                 ([esc(email)] if email else []))
         if peng["logo"]:
             logo_html = (f'<img class="kp-logo" src="/logo/{esc(peng["logo"])}" '
                          f'alt="Logo sekolah">')
@@ -2080,8 +2092,8 @@ class Handler(BaseHTTPRequestHandler):
             logo_html = f'<span class="kp-logo-fallback">{icon("logo")}</span>'
         alamat_html = (f'<div class="kp-alamat">{esc(alamat)}</div>'
                        if alamat else "")
-        kontak_html = (f'<br>{kontak}' if kontak else "")
-        wali_html = esc(wali_nama) if (wali_nama or "").strip() else "&mdash;"
+        ta, _masa, _belakang = tahun_ajaran_info(peng)
+        jk = (st["jenis_kelamin"] or "").strip() or "—"
         return f"""<div class="kpelajar">
           <div class="kp-head">{logo_html}<div class="kp-head-teks">
             <div class="kp-sekolah">{esc(nama_sekolah)}</div>{alamat_html}</div>
@@ -2092,13 +2104,63 @@ class Handler(BaseHTTPRequestHandler):
             <div class="kp-data">
               <div class="kp-nama">{esc(st["nama"])}</div>
               <div class="kp-baris"><span class="kp-label">NIS</span><span class="kp-nilai">{esc(st["kode"])}</span></div>
-              <div class="kp-baris"><span class="kp-label">Kelas</span><span class="kp-nilai">{esc(kelas_nama)}</span></div>
-              <div class="kp-baris"><span class="kp-label">Wali Kelas</span><span class="kp-nilai">{wali_html}</span></div>
+              <div class="kp-baris"><span class="kp-label">Tahun Ajaran</span><span class="kp-nilai">{esc(ta)}</span></div>
+              <div class="kp-baris"><span class="kp-label">Jenis Kelamin</span><span class="kp-nilai">{esc(jk)}</span></div>
             </div>
           </div>
           <div class="kp-foot">
             <img class="kp-qr" src="/qr/{urllib.parse.quote(st["kode"])}.png" alt="QR {esc(st["kode"])}">
-            <div class="kp-ket">Kartu ini adalah tanda pengenal resmi siswa {esc(nama_sekolah)}.{kontak_html}</div>
+            <div class="kp-ket">Kartu ini adalah tanda pengenal resmi siswa {esc(nama_sekolah)}.</div>
+          </div>
+        </div>"""
+
+    def _kartu_belakang_html(self, peng, jenis):
+        """Sisi belakang kartu pelajar / kartu guru: kepala kop sekolah,
+        5 tata tertib penggunaan kartu, baris masa berlaku 3 tahun, dan
+        blok tanda tangan Kepala Sekolah. 'jenis' = 'siswa' atau 'guru'
+        (aturan 1, 4, 5 berbeda)."""
+        nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
+        alamat = (peng["kop_alamat"] or "").strip()
+        telp = (peng["kop_telepon"] or "").strip()
+        kontak_belakang = " &bull; ".join(
+            x for x in ([esc(alamat)] if alamat else []) +
+            ([f"Telp. {esc(telp)}"] if telp else []))
+        if peng["logo"]:
+            logo_html = (f'<img class="kp-logo" src="/logo/{esc(peng["logo"])}" '
+                         f'alt="Logo sekolah">')
+        else:
+            logo_html = f'<span class="kp-logo-fallback">{icon("logo")}</span>'
+        kontak_html = (f'<div class="kp-b-kontak">{kontak_belakang}</div>'
+                       if kontak_belakang else "")
+        _ta, _masa, belakang = tahun_ajaran_info(peng)
+        if jenis == "guru":
+            aturan = [
+                f"Kartu ini adalah identitas resmi guru {nama_sekolah}.",
+                "Wajib dibawa setiap hari saat berada di lingkungan sekolah.",
+                "Dipakai untuk absensi di gerbang — pindai QR Code di kartu.",
+                "Bila hilang atau rusak, segera lapor ke bagian tata usaha.",
+                "Kartu tidak boleh dipindahtangankan ke guru lain."]
+        else:
+            aturan = [
+                f"Kartu ini adalah identitas resmi siswa {nama_sekolah}.",
+                "Wajib dibawa setiap hari saat berada di lingkungan sekolah.",
+                "Dipakai untuk absensi di gerbang — pindai QR Code di kartu.",
+                "Bila hilang atau rusak, segera lapor ke wali kelas.",
+                "Kartu tidak boleh dipindahtangankan ke siswa lain."]
+        items = "".join(f"<li>{esc(a)}</li>" for a in aturan)
+        kelas_belakang = "kpelajar kp-belakang" + (" kp-guru" if jenis == "guru" else "")
+        return f"""<div class="{kelas_belakang}">
+          <div class="kp-b-head">{logo_html}<div class="kp-b-teks">
+            <div class="kp-b-sekolah">{esc(nama_sekolah)}</div>{kontak_html}</div></div>
+          <div class="kp-gold"></div>
+          <div class="kp-b-body">
+            <div class="kp-b-judul">TATA TERTIB PENGGUNAAN KARTU</div>
+            <ol class="kp-tata">{items}</ol>
+          </div>
+          <div class="kp-b-foot">
+            <div class="kp-b-masa">{esc(belakang)}</div>
+            <div class="kp-b-ttd"><div>Kepala Sekolah,</div>
+            <div class="kp-ttd-kosong"></div><div>( ........................ )</div></div>
           </div>
         </div>"""
 
@@ -2122,11 +2184,12 @@ class Handler(BaseHTTPRequestHandler):
         peng = get_pengaturan()
         cards = "".join(
             self._kartu_pelajar_html(st, kelas["nama"], kelas["wali_nama"], peng)
+            + self._kartu_belakang_html(peng, "siswa")
             for st in students)
         body = f"""<h2 class="noprint">Kartu Pelajar - {esc(kelas["nama"])}</h2>
         <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
         &nbsp;<a class="btn btn-ghost" href="/kartu-pelajar">Pilih Kelas Lain</a>
-        &nbsp;Kartu dibuat otomatis dari data siswa ({len(students)} siswa). Kotak foto dikosongkan untuk tempel foto 3&times;4; QR di tiap kartu adalah NIS siswa untuk scan di gerbang.</p>
+        &nbsp;Kartu dibuat otomatis dari data siswa ({len(students)} siswa). Kotak foto dikosongkan untuk tempel foto 3&times;4; QR di tiap kartu adalah NIS siswa untuk scan di gerbang. Sisi belakang berisi tata tertib &amp; masa berlaku kartu.</p>
         <div class="lembar-kp">{cards or '<p>Belum ada siswa di kelas ini.</p>'}</div>"""
         return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
 
@@ -2143,13 +2206,111 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_html(layout(user, "404", "<p>Siswa tidak ditemukan.</p>"), status=404)
         conn.close()
         peng = get_pengaturan()
-        card = self._kartu_pelajar_html(st, st["kelas_nama"], st["wali_nama"], peng)
+        card = (self._kartu_pelajar_html(st, st["kelas_nama"], st["wali_nama"], peng)
+                + self._kartu_belakang_html(peng, "siswa"))
         body = f"""<h2 class="noprint">Kartu Pelajar - {esc(st["nama"])}</h2>
         <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
         &nbsp;<a class="btn btn-ghost" href="/kartu-pelajar/kelas/{st["class_id"]}">Semua Kartu Kelas {esc(st["kelas_nama"])}</a>
         &nbsp;<a class="btn btn-ghost" href="/siswa/{st["id"]}">Kembali ke Detail Siswa</a></p>
         <div class="lembar-kp">{card}</div>"""
         return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
+
+    # -- kartu guru -----------------------------------------------------------
+    # Kartu guru dibuat OTOMATIS dari data guru (seperti Kartu Pelajar
+    # untuk siswa): begitu guru diinput, kartunya langsung ada di menu
+    # ini. Desain Kartu Guru v3 (judul KARTU GURU; Nama, Jabatan "Guru",
+    # Guru Pelajaran = mata pelajaran, Jenis Kelamin; QR = kode_qr ASLI
+    # guru dari database — bukan kode contoh; warna kepala hijau zamrud
+    # + emas supaya langsung beda dari Kartu Pelajar navy/emas).
+    # Admin melihat semua guru aktif; wali kelas hanya kartu dirinya
+    # sendiri (kartu guru lain tidak boleh dibuka wali, sama seperti
+    # /cetak/guru yang terlarang untuk wali).
+    def _kartu_guru_html(self, guru, peng):
+        """Satu kartu guru (ukuran kartu ID 85,6 x 54 mm, desain v3).
+        Jabatan selalu 'Guru'; Guru Pelajaran = mata pelajaran guru
+        (atau '—' bila kosong). QR = kode_qr asli guru untuk scan gerbang."""
+        nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
+        alamat = (peng["kop_alamat"] or "").strip()
+        if peng["logo"]:
+            logo_html = (f'<img class="kp-logo" src="/logo/{esc(peng["logo"])}" '
+                         f'alt="Logo sekolah">')
+        else:
+            logo_html = f'<span class="kp-logo-fallback">{icon("logo")}</span>'
+        alamat_html = (f'<div class="kp-alamat">{esc(alamat)}</div>'
+                       if alamat else "")
+        pelajaran = (guru["mapel"] or "").strip() or "—"
+        kode = guru["kode_qr"] or ""
+        jk = (guru["jenis_kelamin"] or "").strip() or "—"
+        return f"""<div class="kpelajar kp-guru">
+          <div class="kp-head">{logo_html}<div class="kp-head-teks">
+            <div class="kp-sekolah">{esc(nama_sekolah)}</div>{alamat_html}</div>
+            <span class="kp-judul">KARTU GURU</span></div>
+          <div class="kp-gold"></div>
+          <div class="kp-body">
+            <div class="kp-foto">{icon("badge")}<span>FOTO<br>3 &times; 4</span></div>
+            <div class="kp-data">
+              <div class="kp-nama">{esc(guru["nama"])}</div>
+              <div class="kp-baris"><span class="kp-label">Jabatan</span><span class="kp-nilai">Guru</span></div>
+              <div class="kp-baris"><span class="kp-label">Guru Pelajaran</span><span class="kp-nilai">{esc(pelajaran)}</span></div>
+              <div class="kp-baris"><span class="kp-label">Jenis Kelamin</span><span class="kp-nilai">{esc(jk)}</span></div>
+            </div>
+          </div>
+          <div class="kp-foot">
+            <img class="kp-qr" src="/qr/{urllib.parse.quote(kode)}.png" alt="QR {esc(kode)}">
+            <div class="kp-ket">Kartu ini adalah tanda pengenal resmi guru {esc(nama_sekolah)}.</div>
+          </div>
+        </div>"""
+
+    def kartu_guru_index(self, user, flash):
+        conn = db()
+        peng = get_pengaturan()
+        if user["role"] == "guru":
+            # Wali kelas: hanya kartu dirinya sendiri.
+            guru = conn.execute(
+                "SELECT * FROM users WHERE id=? AND role='guru' AND aktif=1",
+                (user["id"],)).fetchone()
+            conn.close()
+            if not guru:
+                return self.send_html(
+                    layout(user, "Kartu Guru", "<p>Kartu tidak ditemukan.</p>"),
+                    status=404)
+            cards = (self._kartu_guru_html(guru, peng)
+                     + self._kartu_belakang_html(peng, "guru"))
+            body = f"""<h2>Kartu Guru</h2>
+            <p class="muted">Ini kartu guru Anda &mdash; dibuat otomatis dari data guru. Tinggal cetak.</p>
+            <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button></p>
+            <div class="lembar-kp">{cards}</div>"""
+            return self.send_html(layout(user, "Kartu Guru", body, flash, aktif="kartu-guru"))
+        gurus = conn.execute(
+            "SELECT * FROM users WHERE role='guru' AND aktif=1 ORDER BY nama").fetchall()
+        conn.close()
+        cards = "".join(
+            self._kartu_guru_html(g, peng) + self._kartu_belakang_html(peng, "guru")
+            for g in gurus)
+        body = f"""<h2 class="noprint">Kartu Guru</h2>
+        <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
+        &nbsp;Kartu dibuat otomatis dari data guru ({len(gurus)} guru aktif). QR di tiap kartu adalah kode guru untuk scan di gerbang. Sisi belakang berisi tata tertib &amp; masa berlaku kartu.</p>
+        <div class="lembar-kp">{cards or '<p>Belum ada guru aktif.</p>'}</div>"""
+        return self.send_html(layout(user, "Kartu Guru", body, flash, aktif="kartu-guru"))
+
+    def kartu_guru_satu(self, user, gid, flash):
+        conn = db()
+        guru = conn.execute(
+            "SELECT * FROM users WHERE id=? AND role='guru' AND aktif=1",
+            (gid,)).fetchone()
+        if not guru or (user["role"] == "guru" and gid != user["id"]):
+            # Untuk wali kelas, kartu guru lain diperlakukan seperti tidak ada.
+            conn.close()
+            return self.send_html(layout(user, "404", "<p>Guru tidak ditemukan.</p>"), status=404)
+        conn.close()
+        peng = get_pengaturan()
+        card = (self._kartu_guru_html(guru, peng)
+                + self._kartu_belakang_html(peng, "guru"))
+        body = f"""<h2 class="noprint">Kartu Guru - {esc(guru["nama"])}</h2>
+        <p class="noprint"><button onclick="window.print()" class="btn btn-primary">Cetak Halaman Ini</button>
+        &nbsp;<a class="btn btn-ghost" href="/kartu-guru">Semua Kartu Guru</a></p>
+        <div class="lembar-kp">{card}</div>"""
+        return self.send_html(layout(user, "Kartu Guru", body, flash, aktif="kartu-guru"))
 
     def qr_png(self, raw_code):
         code = urllib.parse.unquote(raw_code)
@@ -2266,11 +2427,57 @@ WALLPAPER_EXT = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 WALLPAPER_NAMA_RE = re.compile(r"^[0-9a-f]{24}\.(jpg|jpeg|png|webp)$")
 
 
+TAHUN_AJARAN_RE = re.compile(r"^(\d{4})/(\d{4})$")
+TAHUN_AJARAN_DEFAULT = "2026/2027"
+
+
+def _jk_bersih(nilai):
+    """Normalisasi jenis kelamin: 'Laki-laki', 'Perempuan', atau ''.
+    Terima juga 'L'/'P', 'pria'/'wanita', 'male'/'female' (tak peduli
+    huruf besar-kecil); selain itu jadi '' (belum diisi)."""
+    v = (nilai or "").strip().lower()
+    if v in ("laki-laki", "laki laki", "l", "pria", "male"):
+        return "Laki-laki"
+    if v in ("perempuan", "p", "wanita", "female"):
+        return "Perempuan"
+    return ""
+
+
+def _jk_options(terpilih):
+    """Opsi <option> Jenis Kelamin untuk form (terpilih = nilai saat ini)."""
+    out = []
+    for nilai, label in (("", "— Belum diisi —"), ("Laki-laki", "Laki-laki"),
+                         ("Perempuan", "Perempuan")):
+        sel = " selected" if (terpilih or "") == nilai else ""
+        out.append(f'<option value="{nilai}"{sel}>{label}</option>')
+    return "".join(out)
+
+
+def _tahun_ajaran_sah(nilai):
+    """'2026/2027' sah; tahun kedua harus = tahun pertama + 1."""
+    m = TAHUN_AJARAN_RE.match((nilai or "").strip())
+    return bool(m) and int(m.group(2)) == int(m.group(1)) + 1
+
+
+def tahun_ajaran_info(peng):
+    """(tahun_ajaran, masa_berlaku, masa_berlaku_belakang) untuk kartu.
+    '2026/2027' -> masa '3 Tahun (2026 – 2029)' dan belakang
+    'Masa berlaku 3 tahun — Tahun Ajaran 2026/2027 s.d. 2028/2029'."""
+    ta = (peng.get("tahun_ajaran") or TAHUN_AJARAN_DEFAULT).strip()
+    if not _tahun_ajaran_sah(ta):
+        ta = TAHUN_AJARAN_DEFAULT
+    awal = int(ta[:4])
+    akhir = int(ta[5:])
+    return (ta, f"3 Tahun ({awal} – {awal + 3})",
+            f"Masa berlaku 3 tahun — Tahun Ajaran {ta} s.d. {awal + 2}/{akhir + 2}")
+
+
 def get_pengaturan():
     """Baca pengaturan tampilan; selalu kembalikan dict lengkap dgn default."""
     peng = {"bg_color": BG_DEFAULT, "wallpaper": "", "nama_sekolah": "", "logo": "",
             "warna_menu": "", "kejelasan_wp": "", "tema": "",
             "wa_token": "", "kop_alamat": "", "kop_telepon": "", "kop_email": "",
+            "tahun_ajaran": TAHUN_AJARAN_DEFAULT,
             "jam_batas_hadir": JAM_DEFAULT_STR["jam_batas_hadir"],
             "jam_batas_alpa": JAM_DEFAULT_STR["jam_batas_alpa"],
             "jam_panel_selesai": JAM_DEFAULT_STR["jam_panel_selesai"]}
@@ -2297,6 +2504,10 @@ def get_pengaturan():
             peng[_k] = JAM_DEFAULT_STR[_k]
         else:
             peng[_k] = peng[_k].strip()
+    if not _tahun_ajaran_sah(peng["tahun_ajaran"]):
+        peng["tahun_ajaran"] = TAHUN_AJARAN_DEFAULT
+    else:
+        peng["tahun_ajaran"] = peng["tahun_ajaran"].strip()
     if peng["wallpaper"] and not WALLPAPER_NAMA_RE.match(peng["wallpaper"]):
         peng["wallpaper"] = ""
     if peng["logo"] and not WALLPAPER_NAMA_RE.match(peng["logo"]):
@@ -3007,6 +3218,7 @@ def _admin_guru(self, user, flash):
     <form method="post" action="/admin/guru">
       <label>Nama <input name="nama" required></label>
       <label>Mata Pelajaran <input name="mapel" required placeholder="mis. Matematika"></label>
+      <label>Jenis Kelamin <select name="jenis_kelamin">{_jk_options("")}</select></label>
       <label>Nomor WA <input name="no_wa" inputmode="tel" placeholder="mis. 0812xxxxxxx (boleh kosong)"></label>
       <p class="muted"><small>Guru di sini adalah data induk (nama + mapel).
       Login dibuat otomatis hanya saat guru ditunjuk sebagai wali kelas
@@ -3015,8 +3227,8 @@ def _admin_guru(self, user, flash):
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0 6px">
     <h4 style="margin:6px 0 4px">Atau Upload Data Guru dari Excel</h4>
     <p class="muted" style="margin:0 0 8px">Tambah banyak guru sekaligus dari
-    file Excel (.xlsx) dengan kolom: <b>Nama | Mata Pelajaran | Nomor WA</b>
-    (baris pertama judul kolom; Nomor WA boleh dikosongkan). Guru dengan
+    file Excel (.xlsx) dengan kolom: <b>Nama | Mata Pelajaran | Nomor WA | Jenis Kelamin</b>
+    (baris pertama judul kolom; Nomor WA dan Jenis Kelamin boleh dikosongkan). Guru dengan
     nama yang sudah terdaftar akan dilewati, tidak digandakan.</p>
     <p style="margin:0 0 4px"><a class="btn btn-ghost" href="/admin/guru/template">{icon('download')} Unduh Template Excel Guru</a></p>
     <form method="post" action="/admin/guru/import" enctype="multipart/form-data">
@@ -3034,10 +3246,10 @@ def _post_admin_guru(self, f):
     ph, salt = hash_password(secrets.token_urlsafe(24))
     conn = db()
     cur = conn.execute(
-        "INSERT INTO users (username,password_hash,salt,role,nama,mapel,no_wa) VALUES (?,?,?,'guru',?,?,?)",
+        "INSERT INTO users (username,password_hash,salt,role,nama,mapel,no_wa,jenis_kelamin) VALUES (?,?,?,'guru',?,?,?,?)",
         ("baru-" + secrets.token_hex(8), ph, salt,
          f["nama"].strip(), f.get("mapel", "").strip(),
-         f.get("no_wa", "").strip()))
+         f.get("no_wa", "").strip(), _jk_bersih(f.get("jenis_kelamin", ""))))
     gid = cur.lastrowid
     conn.execute("UPDATE users SET username=?, kode_qr=? WHERE id=?",
                  (f"guru-{gid}", kode_qr_guru_baru(conn, gid), gid))
@@ -3113,6 +3325,7 @@ def _admin_guru_edit(self, user, gid, flash):
     <form method="post" action="/admin/guru/{g['id']}/edit" class="card form-card">
       <label>Nama <input name="nama" value="{esc(g['nama'])}" required></label>
       <label>Mata Pelajaran <input name="mapel" value="{esc(g['mapel'] or '')}" required></label>
+      <label>Jenis Kelamin <select name="jenis_kelamin">{_jk_options(g['jenis_kelamin'])}</select></label>
       <label>Nomor WA <input name="no_wa" value="{esc(g['no_wa'] or '')}" inputmode="tel" placeholder="mis. 0812xxxxxxx (boleh kosong)"></label>
       <label>Kode QR guru <input value="{esc(g['kode_qr'] or '')}" readonly disabled></label>
       <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
@@ -3130,9 +3343,9 @@ def _post_admin_guru_edit(self, gid, f):
     if not g:
         conn.close()
         return self.redirect("/admin/guru", "Guru tidak ditemukan.")
-    conn.execute("UPDATE users SET nama=?, mapel=?, no_wa=? WHERE id=?",
+    conn.execute("UPDATE users SET nama=?, mapel=?, no_wa=?, jenis_kelamin=? WHERE id=?",
                  (f["nama"].strip(), f.get("mapel", "").strip(),
-                  f.get("no_wa", "").strip(), gid))
+                  f.get("no_wa", "").strip(), _jk_bersih(f.get("jenis_kelamin", "")), gid))
     conn.commit(); conn.close()
     return self.redirect("/admin/guru", "Guru diperbarui.")
 
@@ -3604,12 +3817,14 @@ def _admin_kelas_detail(self, user, kid, flash):
       <label>Nama <input name="nama" required></label>
       <label>NIS <input name="kode" required></label>
       <input type="hidden" name="class_id" value="{kelas['id']}">
+      <label>Jenis Kelamin <select name="jenis_kelamin">{_jk_options("")}</select></label>
       <button type="submit" class="btn btn-primary">Tambah Siswa</button></form>
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0 6px">
     <h4 style="margin:6px 0 4px">Atau Upload Data Siswa Kelas {esc(kelas["nama"])} dari Excel</h4>
     <p class="muted" style="margin:0 0 8px">Tambah banyak siswa ke kelas
     <b>{esc(kelas["nama"])}</b> sekaligus dari file Excel (.xlsx) dengan
-    2 kolom: <b>Nama | NIS</b> (baris pertama judul kolom). Semua siswa di
+    kolom: <b>Nama | NIS | Jenis Kelamin</b> (baris pertama judul kolom;
+    Jenis Kelamin boleh dikosongkan). Semua siswa di
     file ini masuk ke kelas ini &mdash; tidak perlu kolom Kelas. NIS yang
     sudah terdaftar akan dilewati, tidak digandakan.</p>
     <p style="margin:0 0 4px"><a class="btn btn-ghost" href="/admin/kelas/{kelas['id']}/template">{icon('download')} Unduh Template Excel Siswa Kelas Ini</a></p>
@@ -3656,6 +3871,7 @@ def _admin_siswa(self, user, qs, flash):
       <label>Nama <input name="nama" required></label>
       <label>NIS <input name="kode" required></label>
       <label>Kelas <select name="class_id">{class_opts}</select></label>
+      <label>Jenis Kelamin <select name="jenis_kelamin">{_jk_options("")}</select></label>
       <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>"""
     return self.send_html(layout(user, "Siswa", body, flash, aktif="siswa"))
 
@@ -3663,8 +3879,9 @@ def _admin_siswa(self, user, qs, flash):
 def _post_admin_siswa(self, f):
     try:
         conn = db()
-        conn.execute("INSERT INTO students (nama,kode,class_id) VALUES (?,?,?)",
-                     (f["nama"].strip(), f["kode"].strip(), int(f["class_id"])))
+        conn.execute("INSERT INTO students (nama,kode,class_id,jenis_kelamin) VALUES (?,?,?,?)",
+                     (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]),
+                      _jk_bersih(f.get("jenis_kelamin", ""))))
         conn.commit(); conn.close()
         return self.redirect("/admin/siswa", "Siswa ditambahkan.")
     except sqlite3.IntegrityError:
@@ -3688,6 +3905,7 @@ def _admin_siswa_edit(self, user, sid, flash):
       <label>Nama <input name="nama" value="{esc(st['nama'])}" required></label>
       <label>NIS <input name="kode" value="{esc(st['kode'])}" required></label>
       <label>Kelas <select name="class_id">{class_opts}</select></label>
+      <label>Jenis Kelamin <select name="jenis_kelamin">{_jk_options(st['jenis_kelamin'])}</select></label>
       <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
     <p><a href="/admin/siswa">Kembali ke daftar siswa</a></p>"""
     return self.send_html(layout(user, "Edit Siswa", body, flash, aktif="siswa"))
@@ -3700,8 +3918,9 @@ def _post_admin_siswa_edit(self, sid, f):
         conn.close()
         return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
     try:
-        conn.execute("UPDATE students SET nama=?, kode=?, class_id=? WHERE id=?",
-                     (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]), sid))
+        conn.execute("UPDATE students SET nama=?, kode=?, class_id=?, jenis_kelamin=? WHERE id=?",
+                     (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]),
+                      _jk_bersih(f.get("jenis_kelamin", "")), sid))
         conn.commit(); conn.close()
         return self.redirect("/admin/siswa", "Siswa diperbarui.")
     except sqlite3.IntegrityError:
@@ -3864,6 +4083,12 @@ def _admin_tampilan(self, user, flash):
       <label>Email sekolah (kop surat)
         <input name="kop_email" value="{esc(peng['kop_email'])}"
                placeholder="mis. info@sekolah.sch.id"></label>
+      <label>Tahun Ajaran (tampil di Kartu Pelajar &amp; Kartu Guru)
+        <input name="tahun_ajaran" value="{esc(peng['tahun_ajaran'])}"
+               placeholder="mis. 2026/2027"></label>
+      <p class="muted"><small>Tahun Ajaran menentukan Masa Berlaku kartu:
+      kartu berlaku 3 tahun sejak tahun pertama (mis. 2026/2027 &rarr;
+      2026 &ndash; 2029). Ubah tiap tahun ajaran baru.</small></p>
       <label>Warna latar aplikasi</label>
       <div class="swatches">{swatches}
         <label class="swatch kustom" title="Warna kustom">
@@ -3928,9 +4153,17 @@ def _post_admin_tampilan(self, f):
         warna = (f.get("bg_color_custom") or "").strip()
     if not re.match(r"^#[0-9a-fA-F]{6}$", warna):
         warna = BG_DEFAULT
+    ta = (f.get("tahun_ajaran") or "").strip()
+    if ta and not _tahun_ajaran_sah(ta):
+        # Nilai tidak sah: ditolak, pengaturan lama tidak berubah.
+        return self.redirect("/admin/tampilan",
+                             "Tahun Ajaran tidak valid; pakai format 2026/2027. "
+                             "Pengaturan tidak berubah.")
     conn = db()
     set_pengaturan(conn, "bg_color", warna.lower())
     set_pengaturan(conn, "nama_sekolah", (f.get("nama_sekolah") or "").strip())
+    if ta:
+        set_pengaturan(conn, "tahun_ajaran", ta)
     for _k in ("kop_alamat", "kop_telepon", "kop_email"):
         set_pengaturan(conn, _k, (f.get(_k) or "").strip()[:200])
     conn.commit(); conn.close()
@@ -4274,11 +4507,12 @@ def _buat_template_excel(judul_sheet, kolom, lebar, petunjuk):
 
 def _admin_siswa_template(self):
     data = _buat_template_excel(
-        "Data Siswa", ["Nama", "NIS", "Kelas"], [30, 16, 16],
+        "Data Siswa", ["Nama", "NIS", "Kelas", "Jenis Kelamin"], [30, 16, 16, 16],
         ["Template Import Data Siswa",
          "Isi data siswa mulai baris ke-2 pada lembar 'Data Siswa'.",
-         "Kolom: Nama | NIS | Kelas (nama kelas, mis. 1A).",
-         "Contoh baris: Budi Santoso | 1001 | 1A",
+         "Kolom: Nama | NIS | Kelas (nama kelas, mis. 1A) | Jenis Kelamin (boleh kosong).",
+         "Jenis Kelamin diisi 'Laki-laki' atau 'Perempuan' (untuk Kartu Pelajar).",
+         "Contoh baris: Budi Santoso | 1001 | 1A | Laki-laki",
          "Kelas yang belum ada akan dibuat otomatis saat upload.",
          "NIS yang sudah terdaftar akan dilewati (tidak digandakan).",
          "Simpan sebagai .xlsx, lalu upload di menu Kelola Siswa."])
@@ -4290,11 +4524,12 @@ def _admin_siswa_template(self):
 
 def _admin_guru_template(self):
     data = _buat_template_excel(
-        "Data Guru", ["Nama", "Mata Pelajaran", "Nomor WA"], [30, 24, 20],
+        "Data Guru", ["Nama", "Mata Pelajaran", "Nomor WA", "Jenis Kelamin"], [30, 24, 20, 16],
         ["Template Import Data Guru",
          "Isi data guru mulai baris ke-2 pada lembar 'Data Guru'.",
-         "Kolom: Nama | Mata Pelajaran | Nomor WA (Nomor WA boleh kosong).",
-         "Contoh baris: Ibu Ani Wijaya | Matematika | 081234567890",
+         "Kolom: Nama | Mata Pelajaran | Nomor WA | Jenis Kelamin (Nomor WA dan Jenis Kelamin boleh kosong).",
+         "Jenis Kelamin diisi 'Laki-laki' atau 'Perempuan' (untuk Kartu Guru).",
+         "Contoh baris: Ibu Ani Wijaya | Matematika | 081234567890 | Perempuan",
          "Guru dengan nama yang sudah terdaftar akan dilewati.",
          "Simpan sebagai .xlsx, lalu upload di menu Kelola Guru."])
     return self.send_bytes(
@@ -4329,6 +4564,7 @@ def _post_admin_siswa_import(self):
         nama = _sel_excel(row[0]) if len(row) > 0 else ""
         kode = _sel_excel(row[1]) if len(row) > 1 else ""
         kelas_nama = _sel_excel(row[2]) if len(row) > 2 else ""
+        jk = _sel_excel(row[3]) if len(row) > 3 else ""
         if not nama and not kode and not kelas_nama:
             continue  # baris kosong: abaikan diam-diam
         if not nama or not kode or not kelas_nama:
@@ -4343,8 +4579,8 @@ def _post_admin_siswa_import(self):
                                (kelas_nama,))
             kelas_peta[kunci] = cur.lastrowid
             kelas_baru += 1
-        conn.execute("INSERT INTO students (nama, kode, class_id) "
-                     "VALUES (?,?,?)", (nama, kode, kelas_peta[kunci]))
+        conn.execute("INSERT INTO students (nama, kode, class_id, jenis_kelamin) "
+                     "VALUES (?,?,?,?)", (nama, kode, kelas_peta[kunci], _jk_bersih(jk)))
         nis_ada.add(kode)
         ditambah += 1
     conn.commit(); conn.close()
@@ -4357,15 +4593,16 @@ def _post_admin_siswa_import(self):
     return self.redirect("/admin/siswa", pesan + ".")
 
 
-def _tambah_guru_conn(conn, nama, mapel, no_wa=""):
+def _tambah_guru_conn(conn, nama, mapel, no_wa="", jk=""):
     """Buat satu guru (data induk) persis seperti Tambah Guru manual:
     username penanda diganti 'guru-<id>' + kode QR otomatis; login
     sungguhan lahir hanya lewat penunjukan wali kelas."""
     ph, salt = hash_password(secrets.token_urlsafe(24))
     cur = conn.execute(
-        "INSERT INTO users (username,password_hash,salt,role,nama,mapel,no_wa) "
-        "VALUES (?,?,?,'guru',?,?,?)",
-        ("baru-" + secrets.token_hex(8), ph, salt, nama, mapel, no_wa))
+        "INSERT INTO users (username,password_hash,salt,role,nama,mapel,no_wa,jenis_kelamin) "
+        "VALUES (?,?,?,'guru',?,?,?,?)",
+        ("baru-" + secrets.token_hex(8), ph, salt, nama, mapel, no_wa,
+         _jk_bersih(jk)))
     gid = cur.lastrowid
     conn.execute("UPDATE users SET username=?, kode_qr=? WHERE id=?",
                  (f"guru-{gid}", kode_qr_guru_baru(conn, gid), gid))
@@ -4373,20 +4610,22 @@ def _tambah_guru_conn(conn, nama, mapel, no_wa=""):
 
 
 def _admin_kelas_template(self, kid):
-    """Template Excel import siswa UNTUK SATU KELAS: hanya 2 kolom
-    Nama | NIS — kelasnya sudah pasti dari halaman kelas yang dibuka."""
+    """Template Excel import siswa UNTUK SATU KELAS: kolom
+    Nama | NIS | Jenis Kelamin (opsional) — kelasnya sudah pasti dari
+    halaman kelas yang dibuka."""
     conn = db()
     kelas = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
     conn.close()
     if not kelas:
         return self.redirect("/admin/kelas", "Kelas tidak ditemukan.")
     data = _buat_template_excel(
-        "Data Siswa", ["Nama", "NIS"], [30, 16],
+        "Data Siswa", ["Nama", "NIS", "Jenis Kelamin"], [30, 16, 16],
         [f"Template Import Data Siswa — Kelas {kelas['nama']}",
          "Isi data siswa mulai baris ke-2 pada lembar 'Data Siswa'.",
-         "Kolom: Nama | NIS. Tidak perlu kolom Kelas: semua siswa di",
+         "Kolom: Nama | NIS | Jenis Kelamin (boleh kosong). Tidak perlu kolom Kelas: semua siswa di",
          f"file ini masuk ke kelas {kelas['nama']}.",
-         "Contoh baris: Budi Santoso | 1001",
+         "Jenis Kelamin diisi 'Laki-laki' atau 'Perempuan' (untuk Kartu Pelajar).",
+         "Contoh baris: Budi Santoso | 1001 | Laki-laki",
          "NIS yang sudah terdaftar akan dilewati (tidak digandakan).",
          "Simpan sebagai .xlsx, lalu upload di halaman kelas ini."])
     bersih = re.sub(r"[^\w.\-]+", "_", kelas["nama"]).strip("_") or "kelas"
@@ -4398,8 +4637,9 @@ def _admin_kelas_template(self, kid):
 
 def _post_admin_kelas_import(self, kid):
     """Import siswa dari Excel ke SATU kelas (halaman detail kelas):
-    file 2 kolom Nama | NIS; kolom ketiga bila ada diabaikan — kelas
-    selalu kelas halaman ini. NIS duplikat dilewati."""
+    file Nama | NIS | Jenis Kelamin (kolom ketiga opsional — bila ada
+    diisi 'Laki-laki'/'Perempuan' untuk Kartu Pelajar); kelas selalu
+    kelas halaman ini. NIS duplikat dilewati."""
     conn = db()
     kelas = conn.execute("SELECT * FROM classes WHERE id=?", (kid,)).fetchone()
     conn.close()
@@ -4426,6 +4666,7 @@ def _post_admin_kelas_import(self, kid):
             break
         nama = _sel_excel(row[0]) if len(row) > 0 else ""
         kode = _sel_excel(row[1]) if len(row) > 1 else ""
+        jk = _sel_excel(row[2]) if len(row) > 2 else ""
         if not nama and not kode:
             continue
         if not nama or not kode:
@@ -4434,8 +4675,8 @@ def _post_admin_kelas_import(self, kid):
         if kode in nis_ada:
             dilewati += 1
             continue
-        conn.execute("INSERT INTO students (nama, kode, class_id) "
-                     "VALUES (?,?,?)", (nama, kode, kid))
+        conn.execute("INSERT INTO students (nama, kode, class_id, jenis_kelamin) "
+                     "VALUES (?,?,?,?)", (nama, kode, kid, _jk_bersih(jk)))
         nis_ada.add(kode)
         ditambah += 1
     conn.commit(); conn.close()
@@ -4576,6 +4817,7 @@ def _post_admin_guru_import(self):
         nama = _sel_excel(row[0]) if len(row) > 0 else ""
         mapel = _sel_excel(row[1]) if len(row) > 1 else ""
         no_wa = _sel_excel(row[2]) if len(row) > 2 else ""
+        jk = _sel_excel(row[3]) if len(row) > 3 else ""
         if not nama and not mapel:
             continue
         if not nama:
@@ -4584,7 +4826,7 @@ def _post_admin_guru_import(self):
         if nama.lower() in nama_ada:
             dilewati += 1
             continue
-        _tambah_guru_conn(conn, nama, mapel, no_wa)
+        _tambah_guru_conn(conn, nama, mapel, no_wa, jk)
         nama_ada.add(nama.lower())
         ditambah += 1
     conn.commit(); conn.close()
