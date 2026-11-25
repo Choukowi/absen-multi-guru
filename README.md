@@ -41,10 +41,24 @@ Ini proyek kode mandiri yang bisa di-deploy sendiri.
   **otomatis** dari data siswa (begitu siswa diinput, kartunya langsung
   ada — lewat form maupun import Excel). Templat memakai kop sekolah
   dari Pengaturan Tampilan (logo + nama + alamat + telepon + email,
-  sama dengan kop Excel): kepala gradasi + garis emas, kotak foto 3x4
-  untuk tempel foto, nama/NIS/kelas/wali kelas, dan QR NIS di kaki
-  kartu untuk scan di gerbang. Satu kartu juga bisa dibuka dari halaman
-  Detail Siswa. Wali kelas hanya melihat kartu kelasnya sendiri.
+  sama dengan kop Excel): kepala gradasi navy + garis emas, kotak foto
+  3x4 untuk tempel foto, nama/NIS/Tahun Ajaran/Jenis Kelamin, dan QR
+  NIS di kaki kartu untuk scan di gerbang. Sisi belakang: 5 tata tertib
+  + masa berlaku 3 tahun + tanda tangan Kepala Sekolah. Satu kartu juga
+  bisa dibuka dari halaman Detail Siswa. Wali kelas hanya melihat kartu
+  kelasnya sendiri.
+- **Kartu Guru**: kartu ID guru 85,6 x 54 mm, dibuat **otomatis** dari
+  data guru (menu Kartu Guru). Desain sama dengan Kartu Pelajar tapi
+  kepala & belakang **hijau zamrud + emas** supaya langsung beda:
+  nama/Jabatan (Guru)/Guru Pelajaran (mata pelajaran)/Jenis Kelamin,
+  QR = kode_qr asli guru untuk scan di gerbang. Wali kelas hanya
+  melihat kartunya sendiri.
+- **Tahun Ajaran** (Pengaturan Tampilan): kolom input "Tahun Ajaran"
+  (mis. 2026/2027) yang dipakai kartu sebagai Tahun Ajaran dan untuk
+  menghitung masa berlaku 3 tahun di sisi belakang kartu.
+- **Jenis Kelamin**: kolom Laki-laki/Perempuan di data siswa dan guru
+  (form Tambah/Edit + kolom opsional di template/import Excel), tampil
+  di Kartu Pelajar dan Kartu Guru.
 - **Pengaturan Tampilan** (admin): nama sekolah (tampil di aplikasi &
   judul Excel), warna latar aplikasi (8 warna contoh + pemilih warna
   kustom), dan **wallpaper sekolah** (unggah JPG/PNG/WebP maks ±5 MB,
