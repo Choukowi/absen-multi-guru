@@ -2075,18 +2075,21 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_html(layout(user, "Kartu Pelajar", body, flash, aktif="kartu-pelajar"))
 
     def _kartu_pelajar_html(self, st, kelas_nama, wali_nama, peng):
-        """Satu kartu pelajar (ukuran kartu ID 85,6 x 54 mm, desain v3):
-        kepala kop sekolah (logo + nama + alamat), kotak foto 3x4
-        (aplikasi belum menyimpan foto siswa, jadi kotaknya untuk tempel
-        foto), data siswa (nama, NIS, Tahun Ajaran dari Pengaturan,
-        Jenis Kelamin), dan QR NIS BESAR di kanan body, sejajar dengan
-        data siswa — persis gambar v3 yang disetujui Bos (25 Nov 2026).
-        Kaki kartu hanya berisi keterangan. TANPA kolom Kelas dan TANPA
-        Masa Berlaku di depan — sesuai desain Kartu Pelajar v3 yang
-        disetujui Bos (25 Nov 2026). kelas_nama/wali_nama tidak lagi
-        tercetak di kartu (kelas tetap tampil di judul halaman)."""
+        """Satu kartu pelajar (ukuran kartu ID 85,6 x 54 mm, format gambar v3
+        yang disetujui Bos 25 Nov 2026, diterapkan 26 Nov 2026 atas perintah
+        Bos "format ini terapkan"): kepala kop besar (logo bundar cincin
+        emas, nama sekolah serif, alamat + kontak, garis emas + 5 titik
+        warna, judul KARTU PELAJAR serif emas), foto 3x4 kiri, data tengah
+        (label emas di atas nilai: Nama, NIS, Tahun Ajaran, Jenis Kelamin),
+        QR NIS BESAR 20 mm di kanan body + kode di bawahnya, keterangan
+        di dalam body di bawah data. TANPA kolom Kelas dan TANPA Masa
+        Berlaku di depan — sesuai desain Kartu Pelajar v3 yang disetujui
+        Bos (25 Nov 2026). kelas_nama/wali_nama tidak lagi tercetak di
+        kartu (kelas tetap tampil di judul halaman)."""
         nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
         alamat = (peng["kop_alamat"] or "").strip()
+        telp = (peng["kop_telepon"] or "").strip()
+        email = (peng["kop_email"] or "").strip()
         if peng["logo"]:
             logo_html = (f'<img class="kp-logo" src="/logo/{esc(peng["logo"])}" '
                          f'alt="Logo sekolah">')
@@ -2094,25 +2097,30 @@ class Handler(BaseHTTPRequestHandler):
             logo_html = f'<span class="kp-logo-fallback">{icon("logo")}</span>'
         alamat_html = (f'<div class="kp-alamat">{esc(alamat)}</div>'
                        if alamat else "")
+        kontak = " &bull; ".join(
+            x for x in ([f"Telp. {esc(telp)}"] if telp else []) +
+            ([esc(email)] if email else []))
+        kontak_html = (f'<div class="kp-kontak">{kontak}</div>' if kontak else "")
         ta, _masa, _belakang = tahun_ajaran_info(peng)
+        ta_tampil = ta.replace("/", " / ")
         jk = (st["jenis_kelamin"] or "").strip() or "—"
+        nama_kelas = " kp-nama-panjang" if len(st["nama"]) > 22 else ""
         return f"""<div class="kpelajar">
           <div class="kp-head">{logo_html}<div class="kp-head-teks">
-            <div class="kp-sekolah">{esc(nama_sekolah)}</div>{alamat_html}</div>
-            <span class="kp-judul">KARTU PELAJAR</span></div>
+            <div class="kp-sekolah">{esc(nama_sekolah)}</div>{alamat_html}{kontak_html}
+            <div class="kp-garis-titik"><span class="kp-garis"></span><span class="kp-dot" style="background:#ef4444"></span><span class="kp-dot" style="background:#f59e0b"></span><span class="kp-dot" style="background:#22c55e"></span><span class="kp-dot" style="background:#3b82f6"></span><span class="kp-dot" style="background:#a855f7"></span></div>
+            <div class="kp-judul">KARTU PELAJAR</div></div></div>
           <div class="kp-gold"></div>
           <div class="kp-body">
-            <div class="kp-foto">{icon("badge")}<span>FOTO<br>3 &times; 4</span></div>
+            <div class="kp-foto"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/></svg><span>FOTO<br>3 &times; 4</span></div>
             <div class="kp-data">
-              <div class="kp-nama">{esc(st["nama"])}</div>
-              <div class="kp-baris"><span class="kp-label">NIS</span><span class="kp-nilai">{esc(st["kode"])}</span></div>
-              <div class="kp-baris"><span class="kp-label">Tahun Ajaran</span><span class="kp-nilai">{esc(ta)}</span></div>
-              <div class="kp-baris"><span class="kp-label">Jenis Kelamin</span><span class="kp-nilai">{esc(jk)}</span></div>
+              <div class="kp-pas"><div class="kp-pas-label">Nama</div><div class="kp-pas-nilai kp-nama{nama_kelas}">{esc(st["nama"])}</div></div>
+              <div class="kp-pas"><div class="kp-pas-label">NIS</div><div class="kp-pas-nilai">{esc(st["kode"])}</div></div>
+              <div class="kp-pas"><div class="kp-pas-label">Tahun Ajaran</div><div class="kp-pas-nilai">{esc(ta_tampil)}</div></div>
+              <div class="kp-pas"><div class="kp-pas-label">Jenis Kelamin</div><div class="kp-pas-nilai">{esc(jk)}</div></div>
+              <div class="kp-catatan"><div class="kp-catatan-1">Kartu ini identitas resmi siswa</div><div class="kp-catatan-2">{esc(nama_sekolah)}</div></div>
             </div>
-            <img class="kp-qr" src="/qr/{urllib.parse.quote(st["kode"])}.png" alt="QR {esc(st["kode"])}">
-          </div>
-          <div class="kp-foot">
-            <div class="kp-ket">Kartu ini adalah tanda pengenal resmi siswa {esc(nama_sekolah)}.</div>
+            <div class="kp-qr-kolom"><img class="kp-qr" src="/qr/{urllib.parse.quote(st["kode"])}.png" alt="QR {esc(st["kode"])}"><div class="kp-qr-kode">{esc(st["kode"])}</div></div>
           </div>
         </div>"""
 
@@ -2235,14 +2243,21 @@ class Handler(BaseHTTPRequestHandler):
     # sendiri (kartu guru lain tidak boleh dibuka wali, sama seperti
     # /cetak/guru yang terlarang untuk wali).
     def _kartu_guru_html(self, guru, peng):
-        """Satu kartu guru (ukuran kartu ID 85,6 x 54 mm, desain v3).
+        """Satu kartu guru (ukuran kartu ID 85,6 x 54 mm, format gambar v3
+        yang disetujui Bos 25 Nov 2026, diterapkan 26 Nov 2026 atas perintah
+        Bos "format ini terapkan" + "samakan" 26 Nov 2026): SAMA PERSIS
+        seperti Kartu Pelajar v3 — kepala kop besar hijau zamrud (logo
+        bundar cincin emas, nama sekolah serif, alamat + kontak, garis
+        emas + 5 titik warna, judul KARTU GURU serif emas), foto 3x4 kiri,
+        data tengah (label emas di atas nilai: Nama, Jabatan, Guru
+        Pelajaran, Jenis Kelamin), QR BESAR 20 mm di kanan body + kode
+        di bawahnya, keterangan di dalam body di bawah data.
         Jabatan selalu 'Guru'; Guru Pelajaran = mata pelajaran guru
-        (atau '—' bila kosong). QR = kode_qr asli guru untuk scan gerbang.
-        Perintah Bos 26 Nov 2026 ('samakan'): QR BESAR di kanan body,
-        sejajar dengan data guru — SAMA PERSIS seperti Kartu Pelajar v3;
-        kaki kartu hanya berisi keterangan."""
+        (atau '—' bila kosong). QR = kode_qr asli guru untuk scan gerbang."""
         nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
         alamat = (peng["kop_alamat"] or "").strip()
+        telp = (peng["kop_telepon"] or "").strip()
+        email = (peng["kop_email"] or "").strip()
         if peng["logo"]:
             logo_html = (f'<img class="kp-logo" src="/logo/{esc(peng["logo"])}" '
                          f'alt="Logo sekolah">')
@@ -2250,26 +2265,30 @@ class Handler(BaseHTTPRequestHandler):
             logo_html = f'<span class="kp-logo-fallback">{icon("logo")}</span>'
         alamat_html = (f'<div class="kp-alamat">{esc(alamat)}</div>'
                        if alamat else "")
+        kontak = " &bull; ".join(
+            x for x in ([f"Telp. {esc(telp)}"] if telp else []) +
+            ([esc(email)] if email else []))
+        kontak_html = (f'<div class="kp-kontak">{kontak}</div>' if kontak else "")
         pelajaran = (guru["mapel"] or "").strip() or "—"
         kode = guru["kode_qr"] or ""
         jk = (guru["jenis_kelamin"] or "").strip() or "—"
+        nama_kelas = " kp-nama-panjang" if len(guru["nama"]) > 22 else ""
         return f"""<div class="kpelajar kp-guru">
           <div class="kp-head">{logo_html}<div class="kp-head-teks">
-            <div class="kp-sekolah">{esc(nama_sekolah)}</div>{alamat_html}</div>
-            <span class="kp-judul">KARTU GURU</span></div>
+            <div class="kp-sekolah">{esc(nama_sekolah)}</div>{alamat_html}{kontak_html}
+            <div class="kp-garis-titik"><span class="kp-garis"></span><span class="kp-dot" style="background:#ef4444"></span><span class="kp-dot" style="background:#f59e0b"></span><span class="kp-dot" style="background:#22c55e"></span><span class="kp-dot" style="background:#3b82f6"></span><span class="kp-dot" style="background:#a855f7"></span></div>
+            <div class="kp-judul">KARTU GURU</div></div></div>
           <div class="kp-gold"></div>
           <div class="kp-body">
-            <div class="kp-foto">{icon("badge")}<span>FOTO<br>3 &times; 4</span></div>
+            <div class="kp-foto"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/></svg><span>FOTO<br>3 &times; 4</span></div>
             <div class="kp-data">
-              <div class="kp-nama">{esc(guru["nama"])}</div>
-              <div class="kp-baris"><span class="kp-label">Jabatan</span><span class="kp-nilai">Guru</span></div>
-              <div class="kp-baris"><span class="kp-label">Guru Pelajaran</span><span class="kp-nilai">{esc(pelajaran)}</span></div>
-              <div class="kp-baris"><span class="kp-label">Jenis Kelamin</span><span class="kp-nilai">{esc(jk)}</span></div>
+              <div class="kp-pas"><div class="kp-pas-label">Nama</div><div class="kp-pas-nilai kp-nama{nama_kelas}">{esc(guru["nama"])}</div></div>
+              <div class="kp-pas"><div class="kp-pas-label">Jabatan</div><div class="kp-pas-nilai">Guru</div></div>
+              <div class="kp-pas"><div class="kp-pas-label">Guru Pelajaran</div><div class="kp-pas-nilai">{esc(pelajaran)}</div></div>
+              <div class="kp-pas"><div class="kp-pas-label">Jenis Kelamin</div><div class="kp-pas-nilai">{esc(jk)}</div></div>
+              <div class="kp-catatan"><div class="kp-catatan-1">Kartu ini identitas resmi guru</div><div class="kp-catatan-2">{esc(nama_sekolah)}</div></div>
             </div>
-            <img class="kp-qr" src="/qr/{urllib.parse.quote(kode)}.png" alt="QR {esc(kode)}">
-          </div>
-          <div class="kp-foot">
-            <div class="kp-ket">Kartu ini adalah tanda pengenal resmi guru {esc(nama_sekolah)}.</div>
+            <div class="kp-qr-kolom"><img class="kp-qr" src="/qr/{urllib.parse.quote(kode)}.png" alt="QR {esc(kode)}"><div class="kp-qr-kode">{esc(kode)}</div></div>
           </div>
         </div>"""
 
