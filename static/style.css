@@ -388,7 +388,8 @@ table.tabel.kelola td.aksi { white-space: normal; }
 .kkode { font-family: ui-monospace, monospace; margin-top: 6px; font-weight: 700; }
 
 /* ---------- Kartu Pelajar: kartu ID 85,6 x 54 mm, kop sekolah di kepala,
-   kotak foto 3x4 (tempel foto), data siswa, QR NIS di kaki. ---------- */
+   kotak foto 3x4 (tempel foto), data siswa, QR NIS BESAR di kanan body
+   sejajar data (gambar v3), keterangan di kaki. ---------- */
 .lembar-kp { display: flex; flex-wrap: wrap; gap: 14px; }
 .kpelajar { width: 85.6mm; height: 54mm; border-radius: 10px; overflow: hidden;
   background: #fff; border: 1px solid var(--garis); box-shadow: var(--shadow-sm);
@@ -414,6 +415,14 @@ table.tabel.kelola td.aksi { white-space: normal; }
   color: var(--muted); font-size: 8px; line-height: 1.3; text-align: center;
   background: #f8fafc; }
 .kp-foto svg { width: 20px; height: 20px; }
+/* Kartu pelajar & kartu guru: foto sedikit lebih sempit supaya kolom
+   data tetap muat di samping QR besar di kanan (perintah Bos 26 Nov
+   2026: Kartu Guru disamakan dengan Kartu Pelajar). */
+.kpelajar .kp-foto { width: 20mm; }
+/* Kartu pelajar & kartu guru: label sedikit lebih sempit supaya nilai
+   "2026/2027" tidak mepet QR di font yang lebar (label-label ini memang
+   sudah tampil 2 baris). */
+.kpelajar .kp-label { width: 56px; }
 .kp-data { flex: 1; min-width: 0; }
 .kp-nama { font-weight: 800; font-size: 13px; line-height: 1.2; }
 .kp-baris { display: flex; gap: 4px; margin-top: 2px; }
@@ -422,7 +431,13 @@ table.tabel.kelola td.aksi { white-space: normal; }
 .kp-nilai { font-weight: 650; }
 .kp-foot { display: flex; align-items: center; gap: 8px;
   border-top: 1px solid var(--garis); padding: 4px 10px; }
-.kp-qr { width: 30px; height: 30px; flex: 0 0 auto; }
+/* Kartu pelajar & kartu guru: QR besar di kanan body, sejajar data
+   (gambar v3); kaki kartu hanya berisi keterangan, rata tengah.
+   Aturan .kp-foot .kp-qr di bawah tidak lagi dipakai kartu mana pun. */
+.kp-foot .kp-qr { width: 30px; height: 30px; flex: 0 0 auto; }
+.kpelajar .kp-body .kp-qr { width: 20mm; height: 20mm;
+  flex: 0 0 auto; align-self: center; }
+.kpelajar .kp-foot { justify-content: center; text-align: center; }
 .kp-ket { font-size: 8px; color: var(--muted); line-height: 1.35; }
 
 /* ---------- Sisi belakang kartu pelajar / kartu guru: navy gelap,
