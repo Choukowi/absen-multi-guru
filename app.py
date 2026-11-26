@@ -2079,10 +2079,12 @@ class Handler(BaseHTTPRequestHandler):
         kepala kop sekolah (logo + nama + alamat), kotak foto 3x4
         (aplikasi belum menyimpan foto siswa, jadi kotaknya untuk tempel
         foto), data siswa (nama, NIS, Tahun Ajaran dari Pengaturan,
-        Jenis Kelamin), dan kaki berisi QR NIS. TANPA kolom Kelas dan
-        TANPA Masa Berlaku di depan — sesuai desain Kartu Pelajar v3
-        yang disetujui Bos (25 Nov 2026). kelas_nama/wali_nama tidak
-        lagi tercetak di kartu (kelas tetap tampil di judul halaman)."""
+        Jenis Kelamin), dan QR NIS BESAR di kanan body, sejajar dengan
+        data siswa — persis gambar v3 yang disetujui Bos (25 Nov 2026).
+        Kaki kartu hanya berisi keterangan. TANPA kolom Kelas dan TANPA
+        Masa Berlaku di depan — sesuai desain Kartu Pelajar v3 yang
+        disetujui Bos (25 Nov 2026). kelas_nama/wali_nama tidak lagi
+        tercetak di kartu (kelas tetap tampil di judul halaman)."""
         nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
         alamat = (peng["kop_alamat"] or "").strip()
         if peng["logo"]:
@@ -2107,9 +2109,9 @@ class Handler(BaseHTTPRequestHandler):
               <div class="kp-baris"><span class="kp-label">Tahun Ajaran</span><span class="kp-nilai">{esc(ta)}</span></div>
               <div class="kp-baris"><span class="kp-label">Jenis Kelamin</span><span class="kp-nilai">{esc(jk)}</span></div>
             </div>
+            <img class="kp-qr" src="/qr/{urllib.parse.quote(st["kode"])}.png" alt="QR {esc(st["kode"])}">
           </div>
           <div class="kp-foot">
-            <img class="kp-qr" src="/qr/{urllib.parse.quote(st["kode"])}.png" alt="QR {esc(st["kode"])}">
             <div class="kp-ket">Kartu ini adalah tanda pengenal resmi siswa {esc(nama_sekolah)}.</div>
           </div>
         </div>"""
@@ -2235,7 +2237,10 @@ class Handler(BaseHTTPRequestHandler):
     def _kartu_guru_html(self, guru, peng):
         """Satu kartu guru (ukuran kartu ID 85,6 x 54 mm, desain v3).
         Jabatan selalu 'Guru'; Guru Pelajaran = mata pelajaran guru
-        (atau '—' bila kosong). QR = kode_qr asli guru untuk scan gerbang."""
+        (atau '—' bila kosong). QR = kode_qr asli guru untuk scan gerbang.
+        Perintah Bos 26 Nov 2026 ('samakan'): QR BESAR di kanan body,
+        sejajar dengan data guru — SAMA PERSIS seperti Kartu Pelajar v3;
+        kaki kartu hanya berisi keterangan."""
         nama_sekolah = (peng["nama_sekolah"] or "Sekolah").strip()
         alamat = (peng["kop_alamat"] or "").strip()
         if peng["logo"]:
@@ -2261,9 +2266,9 @@ class Handler(BaseHTTPRequestHandler):
               <div class="kp-baris"><span class="kp-label">Guru Pelajaran</span><span class="kp-nilai">{esc(pelajaran)}</span></div>
               <div class="kp-baris"><span class="kp-label">Jenis Kelamin</span><span class="kp-nilai">{esc(jk)}</span></div>
             </div>
+            <img class="kp-qr" src="/qr/{urllib.parse.quote(kode)}.png" alt="QR {esc(kode)}">
           </div>
           <div class="kp-foot">
-            <img class="kp-qr" src="/qr/{urllib.parse.quote(kode)}.png" alt="QR {esc(kode)}">
             <div class="kp-ket">Kartu ini adalah tanda pengenal resmi guru {esc(nama_sekolah)}.</div>
           </div>
         </div>"""
