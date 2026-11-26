@@ -466,6 +466,11 @@ table.tabel.kelola td.aksi { white-space: normal; }
    beda dari Kartu Pelajar (navy/emas). Spesifisitas mengalahkan aturan
    tema pastel di bawah (body.tema-* .kp-head). */
 .kpelajar.kp-guru .kp-head { background: linear-gradient(135deg, #065f46, #059669); }
+/* Kartu Pelajar v3: kepala navy/emas TETAP (gambar kartu-v3-gabungan-1200.jpg,
+   perintah Bos 26 Nov 2026) — tidak ikut tema pastel apa pun, sama seperti
+   Kartu Guru yang sudah dikunci hijau zamrud. Spesifisitas mengalahkan
+   aturan tema pastel di bawah (body.tema-* .kp-head). */
+.kpelajar:not(.kp-guru) .kp-head { background: linear-gradient(135deg, #0a1944, #16295c); }
 .kpelajar.kp-belakang.kp-guru { background: linear-gradient(160deg, #022c22, #065f46); }
 
 /* ---------- Pengaturan tampilan ---------- */
