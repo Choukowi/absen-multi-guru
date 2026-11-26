@@ -2450,6 +2450,27 @@ def _jk_bersih(nilai):
     return ""
 
 
+def _jk_isi_kosong(conn, tabel, klausa_where, params, jk_baru):
+    """Isi jenis_kelamin pada baris yang SUDAH ADA, khusus untuk import
+    Excel: hanya bila nilai tersimpan masih kosong DAN file memberi
+    nilai yang valid. Kembalikan True bila baris diperbarui, False bila
+    tidak (nilai sudah terisi, file kosong/tidak valid, atau baris
+    tidak ditemukan). Tidak pernah menimpa nilai yang sudah terisi
+    dan tidak menyentuh kolom lain."""
+    jk = _jk_bersih(jk_baru)
+    if not jk:
+        return False
+    row = conn.execute(
+        f"SELECT jenis_kelamin FROM {tabel} WHERE {klausa_where}",
+        params).fetchone()
+    if not row or (row["jenis_kelamin"] or "").strip():
+        return False
+    conn.execute(
+        f"UPDATE {tabel} SET jenis_kelamin=? WHERE {klausa_where}",
+        (jk,) + tuple(params))
+    return True
+
+
 def _jk_options(terpilih):
     """Opsi <option> Jenis Kelamin untuk form (terpilih = nilai saat ini)."""
     out = []
@@ -3236,7 +3257,8 @@ def _admin_guru(self, user, flash):
     <p class="muted" style="margin:0 0 8px">Tambah banyak guru sekaligus dari
     file Excel (.xlsx) dengan kolom: <b>Nama | Mata Pelajaran | Nomor WA | Jenis Kelamin</b>
     (baris pertama judul kolom; Nomor WA dan Jenis Kelamin boleh dikosongkan). Guru dengan
-    nama yang sudah terdaftar akan dilewati, tidak digandakan.</p>
+    nama yang sudah terdaftar tidak digandakan &mdash; kecuali Jenis Kelamin yang masih
+    kosong akan diisi bila file menyediakannya.</p>
     <p style="margin:0 0 4px"><a class="btn btn-ghost" href="/admin/guru/template">{icon('download')} Unduh Template Excel Guru</a></p>
     <form method="post" action="/admin/guru/import" enctype="multipart/form-data">
       <label>File Excel guru (.xlsx) <input type="file" name="berkas"
@@ -3833,7 +3855,8 @@ def _admin_kelas_detail(self, user, kid, flash):
     kolom: <b>Nama | NIS | Jenis Kelamin</b> (baris pertama judul kolom;
     Jenis Kelamin boleh dikosongkan). Semua siswa di
     file ini masuk ke kelas ini &mdash; tidak perlu kolom Kelas. NIS yang
-    sudah terdaftar akan dilewati, tidak digandakan.</p>
+    sudah terdaftar tidak digandakan &mdash; kecuali Jenis Kelamin yang masih
+    kosong akan diisi bila file menyediakannya.</p>
     <p style="margin:0 0 4px"><a class="btn btn-ghost" href="/admin/kelas/{kelas['id']}/template">{icon('download')} Unduh Template Excel Siswa Kelas Ini</a></p>
     <form method="post" action="/admin/kelas/{kelas['id']}/import" enctype="multipart/form-data">
       <label>File Excel siswa (.xlsx) <input type="file" name="berkas"
@@ -4521,7 +4544,7 @@ def _admin_siswa_template(self):
          "Jenis Kelamin diisi 'Laki-laki' atau 'Perempuan' (untuk Kartu Pelajar).",
          "Contoh baris: Budi Santoso | 1001 | 1A | Laki-laki",
          "Kelas yang belum ada akan dibuat otomatis saat upload.",
-         "NIS yang sudah terdaftar akan dilewati (tidak digandakan).",
+         "NIS yang sudah terdaftar tidak digandakan; bila Jenis Kelamin-nya masih kosong dan file mengisinya, Jenis Kelamin itu diperbarui.",
          "Simpan sebagai .xlsx, lalu upload di menu Kelola Siswa."])
     return self.send_bytes(
         data,
@@ -4537,7 +4560,7 @@ def _admin_guru_template(self):
          "Kolom: Nama | Mata Pelajaran | Nomor WA | Jenis Kelamin (Nomor WA dan Jenis Kelamin boleh kosong).",
          "Jenis Kelamin diisi 'Laki-laki' atau 'Perempuan' (untuk Kartu Guru).",
          "Contoh baris: Ibu Ani Wijaya | Matematika | 081234567890 | Perempuan",
-         "Guru dengan nama yang sudah terdaftar akan dilewati.",
+         "Guru dengan nama yang sudah terdaftar tidak digandakan; bila Jenis Kelamin-nya masih kosong dan file mengisinya, Jenis Kelamin itu diperbarui.",
          "Simpan sebagai .xlsx, lalu upload di menu Kelola Guru."])
     return self.send_bytes(
         data,
@@ -4556,7 +4579,7 @@ def _post_admin_siswa_import(self):
                              "File tidak bisa dibaca sebagai Excel (.xlsx). "
                              "Periksa file-nya lalu coba lagi.")
     conn = db()
-    ditambah = dilewati = kelas_baru = 0
+    ditambah = dilewati = kelas_baru = diperbarui = 0
     nis_ada = {r["kode"] for r in conn.execute("SELECT kode FROM students")}
     kelas_peta = {}
     for r in conn.execute("SELECT id, nama FROM classes"):
@@ -4578,7 +4601,12 @@ def _post_admin_siswa_import(self):
             dilewati += 1
             continue
         if kode in nis_ada:
-            dilewati += 1
+            # NIS sudah terdaftar: tidak digandakan, tapi bila Jenis
+            # Kelamin-nya masih kosong dan file mengisinya, isi saja.
+            if _jk_isi_kosong(conn, "students", "kode=?", (kode,), jk):
+                diperbarui += 1
+            else:
+                dilewati += 1
             continue
         kunci = kelas_nama.lower()
         if kunci not in kelas_peta:
@@ -4594,6 +4622,8 @@ def _post_admin_siswa_import(self):
     pesan = f"Import siswa selesai: {ditambah} siswa ditambahkan"
     if kelas_baru:
         pesan += f", {kelas_baru} kelas baru dibuat"
+    if diperbarui:
+        pesan += f", {diperbarui} data diperbarui (Jenis Kelamin)"
     if dilewati:
         pesan += (f", {dilewati} baris dilewati (NIS sudah ada / data "
                   "tidak lengkap)")
@@ -4633,7 +4663,7 @@ def _admin_kelas_template(self, kid):
          f"file ini masuk ke kelas {kelas['nama']}.",
          "Jenis Kelamin diisi 'Laki-laki' atau 'Perempuan' (untuk Kartu Pelajar).",
          "Contoh baris: Budi Santoso | 1001 | Laki-laki",
-         "NIS yang sudah terdaftar akan dilewati (tidak digandakan).",
+         "NIS yang sudah terdaftar tidak digandakan; bila Jenis Kelamin-nya masih kosong dan file mengisinya, Jenis Kelamin itu diperbarui.",
          "Simpan sebagai .xlsx, lalu upload di halaman kelas ini."])
     bersih = re.sub(r"[^\w.\-]+", "_", kelas["nama"]).strip("_") or "kelas"
     return self.send_bytes(
@@ -4663,7 +4693,7 @@ def _post_admin_kelas_import(self, kid):
                              "File tidak bisa dibaca sebagai Excel (.xlsx). "
                              "Periksa file-nya lalu coba lagi.")
     conn = db()
-    ditambah = dilewati = 0
+    ditambah = dilewati = diperbarui = 0
     nis_ada = {r["kode"] for r in conn.execute("SELECT kode FROM students")}
     for i, row in enumerate(baris):
         if i == 0:
@@ -4680,7 +4710,12 @@ def _post_admin_kelas_import(self, kid):
             dilewati += 1
             continue
         if kode in nis_ada:
-            dilewati += 1
+            # NIS sudah terdaftar: tidak digandakan, tapi bila Jenis
+            # Kelamin-nya masih kosong dan file mengisinya, isi saja.
+            if _jk_isi_kosong(conn, "students", "kode=?", (kode,), jk):
+                diperbarui += 1
+            else:
+                dilewati += 1
             continue
         conn.execute("INSERT INTO students (nama, kode, class_id, jenis_kelamin) "
                      "VALUES (?,?,?,?)", (nama, kode, kid, _jk_bersih(jk)))
@@ -4689,6 +4724,8 @@ def _post_admin_kelas_import(self, kid):
     conn.commit(); conn.close()
     pesan = (f"Import siswa kelas {kelas['nama']} selesai: "
              f"{ditambah} siswa ditambahkan")
+    if diperbarui:
+        pesan += f", {diperbarui} data diperbarui (Jenis Kelamin)"
     if dilewati:
         pesan += (f", {dilewati} baris dilewati (NIS sudah ada / data "
                   "tidak lengkap)")
@@ -4812,7 +4849,7 @@ def _post_admin_guru_import(self):
                              "File tidak bisa dibaca sebagai Excel (.xlsx). "
                              "Periksa file-nya lalu coba lagi.")
     conn = db()
-    ditambah = dilewati = 0
+    ditambah = dilewati = diperbarui = 0
     nama_ada = {(r["nama"] or "").strip().lower() for r in conn.execute(
         "SELECT nama FROM users WHERE role='guru'")}
     for i, row in enumerate(baris):
@@ -4831,13 +4868,22 @@ def _post_admin_guru_import(self):
             dilewati += 1
             continue
         if nama.lower() in nama_ada:
-            dilewati += 1
+            # Nama sudah terdaftar: tidak digandakan, tapi bila Jenis
+            # Kelamin-nya masih kosong dan file mengisinya, isi saja.
+            if _jk_isi_kosong(conn, "users",
+                              "role='guru' AND lower(nama)=?",
+                              (nama.lower(),), jk):
+                diperbarui += 1
+            else:
+                dilewati += 1
             continue
         _tambah_guru_conn(conn, nama, mapel, no_wa, jk)
         nama_ada.add(nama.lower())
         ditambah += 1
     conn.commit(); conn.close()
     pesan = f"Import guru selesai: {ditambah} guru ditambahkan"
+    if diperbarui:
+        pesan += f", {diperbarui} data diperbarui (Jenis Kelamin)"
     if dilewati:
         pesan += (f", {dilewati} baris dilewati (nama sudah ada / data "
                   "tidak lengkap)")
