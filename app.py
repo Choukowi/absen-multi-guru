@@ -198,7 +198,8 @@ CREATE TABLE IF NOT EXISTS kehadiran (
     ref_type TEXT NOT NULL CHECK (ref_type IN ('siswa','guru')),
     ref_id INTEGER NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('Hadir','Terlambat','Sakit','Izin','Alpa')),
-    jam TEXT,                           -- HH:MM (Jakarta); NULL untuk non-scan
+    jam TEXT,                           -- HH:MM masuk (Jakarta); NULL untuk non-scan
+    jam_pulang TEXT,                    -- HH:MM scan pulang hari itu; NULL bila belum scan pulang
     metode TEXT NOT NULL DEFAULT 'scan' CHECK (metode IN ('scan','manual','auto')),
     dicatat_oleh INTEGER REFERENCES users(id),
     UNIQUE (tanggal, ref_type, ref_id)
@@ -302,6 +303,9 @@ def init_db():
     kolom_kelas = {r["name"] for r in conn.execute("PRAGMA table_info(classes)")}
     if "wali_id" not in kolom_kelas:
         conn.execute("ALTER TABLE classes ADD COLUMN wali_id INTEGER REFERENCES users(id)")
+    kolom_hadir = {r["name"] for r in conn.execute("PRAGMA table_info(kehadiran)")}
+    if "jam_pulang" not in kolom_hadir:
+        conn.execute("ALTER TABLE kehadiran ADD COLUMN jam_pulang TEXT")
     conn.commit()
     # backfill kode_qr untuk guru lama yang belum punya
     for r in conn.execute(
@@ -1329,12 +1333,12 @@ class Handler(BaseHTTPRequestHandler):
     # -- scan gerbang -----------------------------------------------------------
     def _kedatangan_hari_ini(self, conn, tgl):
         return conn.execute(
-            """SELECT k.status, k.jam, s.nama AS nama, c.nama AS sub, 'Siswa' AS tipe
+            """SELECT k.status, k.jam, k.jam_pulang, s.nama AS nama, c.nama AS sub, 'Siswa' AS tipe
                FROM kehadiran k JOIN students s ON s.id=k.ref_id
                JOIN classes c ON c.id=s.class_id
                WHERE k.tanggal=? AND k.ref_type='siswa' AND k.metode='scan'
                UNION ALL
-               SELECT k.status, k.jam, u.nama, u.mapel, 'Guru'
+               SELECT k.status, k.jam, k.jam_pulang, u.nama, u.mapel, 'Guru'
                FROM kehadiran k JOIN users u ON u.id=k.ref_id
                WHERE k.tanggal=? AND k.ref_type='guru' AND k.metode='scan'
                ORDER BY jam DESC""", (tgl, tgl)).fetchall()
@@ -1346,7 +1350,8 @@ class Handler(BaseHTTPRequestHandler):
         items = "".join(
             f'<li><span class="pill p-{r["status"].lower()}">{esc(r["status"])}</span> '
             f'<b>{esc(r["nama"])}</b> <span class="muted">{esc(r["tipe"])} &bull; '
-            f'{esc(r["sub"] or "")}</span> <span class="jam">{esc(r["jam"] or "")}</span></li>'
+            f'{esc(r["sub"] or "")}</span> <span class="jam">{esc(r["jam"] or "")}'
+            f'{" &bull; Plg " + esc(r["jam_pulang"]) if r["jam_pulang"] else ""}</span></li>'
             for r in datang)
         items = items or '<li class="muted">Belum ada yang scan hari ini.</li>'
         return len(datang), items
@@ -1365,7 +1370,7 @@ class Handler(BaseHTTPRequestHandler):
         _jh, _ja, _jp = jam_absensi()
         body = f"""<h2>Scan Gerbang</h2>
         <p class="muted">{esc(NAMA_HARI[now.weekday()])}, {esc(fmt_tanggal(now.date()))} &bull;
-        pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; {_jh.strftime('%H:%M')} = Hadir, lewat = Terlambat, scan ditutup {_ja.strftime('%H:%M')}</p>
+        pukul {esc(now.strftime('%H:%M'))} WIB &bull; scan &le; {_jh.strftime('%H:%M')} = Hadir, lewat = Terlambat, scan ditutup {_ja.strftime('%H:%M')}; scan ulang setelah {_ja.strftime('%H:%M')} = absen pulang</p>
         <div id="hasilScan">{hasil_html}</div>
         <section class="card scan-card">
           <div class="scan-frame"><video id="cam" autoplay playsinline muted></video></div>
@@ -1448,16 +1453,34 @@ class Handler(BaseHTTPRequestHandler):
                 "pesan": f"Scan sudah ditutup (lewat jam {jam_alpa_s.strftime('%H.%M')}). "
                          f"{nama} tetap tercatat Alpa hari ini."}
         if ada:
-            if ada["metode"] == "scan":
-                conn.close()
-                return {
-                    "jenis": "info", "judul": "Sudah tercatat",
-                    "pesan": f"{nama} sudah tercatat {ada['status']} pukul {ada['jam'] or '-'} hari ini."}
             if ada["status"] in ("Sakit", "Izin"):
                 conn.close()
                 return {
                     "jenis": "info", "judul": f"{nama} ditandai {ada['status']}",
                     "pesan": f"{nama} hari ini ditandai {ada['status']} (manual), scan tidak mengubahnya."}
+            # ABSEN PULANG: scan ulang SESUDAH jam tutup absen masuk
+            # (jam_alpa, bawaan 09:00) oleh yang sudah tercatat Hadir /
+            # Terlambat hari ini = absen pulang, bukan "Sudah tercatat".
+            # Scan ulang SEBELUM jam itu tetap "Sudah tercatat", supaya
+            # kamera yang membaca kartu yang sama dua kali saat masuk
+            # tidak keliru mencatat pulang.
+            if ada["status"] in ("Hadir", "Terlambat") and now.time() >= jam_alpa_s:
+                if ada["jam_pulang"]:
+                    conn.close()
+                    return {
+                        "jenis": "info", "judul": "Sudah absen pulang",
+                        "pesan": f"{nama} sudah absen pulang pukul {ada['jam_pulang']} hari ini."}
+                conn.execute("UPDATE kehadiran SET jam_pulang=? WHERE id=?",
+                             (jam, ada["id"]))
+                conn.commit(); conn.close()
+                return {
+                    "jenis": "pulang", "judul": nama,
+                    "pesan": f"{sub} • Pulang • {jam}"}
+            if ada["metode"] == "scan":
+                conn.close()
+                return {
+                    "jenis": "info", "judul": "Sudah tercatat",
+                    "pesan": f"{nama} sudah tercatat {ada['status']} pukul {ada['jam'] or '-'} hari ini."}
             if ada["metode"] == "manual":
                 conn.close()
                 return {
@@ -1501,6 +1524,8 @@ class Handler(BaseHTTPRequestHandler):
         link = f'/kehadiran/edit?tanggal={tanggal}&tipe={tipe}&id={ref_id}'
         if rec:
             jam = f'<span class="jam">{esc(fmt_jam_titik(rec["jam"]))}</span>' if rec["jam"] else ""
+            if rec["jam_pulang"]:
+                jam += (f'<span class="jam">Plg {esc(fmt_jam_titik(rec["jam_pulang"]))}</span>')
             return (f'<td><a class="sel" href="{link}">'
                     f'<span class="pill p-{rec["status"].lower()}">{esc(rec["status"])}</span>{jam}</a></td>')
         if tanggal > hari_ini:
@@ -1711,6 +1736,7 @@ class Handler(BaseHTTPRequestHandler):
             f'<option{" selected" if rec and rec["status"] == st else ""}>{st}</option>'
             for st in STATUS_LIST)
         jam_val = rec["jam"] if rec and rec["jam"] else ""
+        jam_pulang_val = rec["jam_pulang"] if rec and rec["jam_pulang"] else ""
         body = f"""<h2>Ubah Kehadiran</h2>
         <form method="post" action="/kehadiran/edit" class="card form-card">
           <input type="hidden" name="tipe" value="{esc(tipe)}">
@@ -1721,6 +1747,8 @@ class Handler(BaseHTTPRequestHandler):
           <label>Status <select name="status">{status_opts}</select></label>
           <label>Jam masuk (untuk Hadir/Terlambat; boleh kosong)
             <input type="time" name="jam" value="{esc(jam_val)}"></label>
+          <label>Jam pulang (scan pulang; boleh kosong)
+            <input type="time" name="jam_pulang" value="{esc(jam_pulang_val)}"></label>
           <button type="submit" class="btn btn-primary">Simpan</button></form>
         <p><a href="/tabel-{'siswa' if tipe == 'siswa' else 'guru'}">Kembali ke tabel</a></p>"""
         return self.send_html(layout(user, "Ubah Kehadiran", body, flash))
@@ -1750,17 +1778,19 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
             return self.redirect("/dashboard", "Data tidak ditemukan.")
         jam = (f.get("jam") or "").strip() or None
+        jam_pulang = (f.get("jam_pulang") or "").strip() or None
         if status not in ("Hadir", "Terlambat"):
             jam = None
+            jam_pulang = None
         elif not jam and tanggal == waktu_sekarang().strftime("%Y-%m-%d"):
             jam = waktu_sekarang().strftime("%H:%M")
         conn.execute(
-            """INSERT INTO kehadiran (tanggal, ref_type, ref_id, status, jam, metode, dicatat_oleh)
-               VALUES (?,?,?,?,?,'manual',?)
+            """INSERT INTO kehadiran (tanggal, ref_type, ref_id, status, jam, jam_pulang, metode, dicatat_oleh)
+               VALUES (?,?,?,?,?,?,'manual',?)
                ON CONFLICT(tanggal, ref_type, ref_id) DO UPDATE SET
-                 status=excluded.status, jam=excluded.jam, metode='manual',
-                 dicatat_oleh=excluded.dicatat_oleh""",
-            (tanggal, tipe, ref_id, status, jam, user["id"]))
+                 status=excluded.status, jam=excluded.jam, jam_pulang=excluded.jam_pulang,
+                 metode='manual', dicatat_oleh=excluded.dicatat_oleh""",
+            (tanggal, tipe, ref_id, status, jam, jam_pulang, user["id"]))
         conn.commit(); conn.close()
         if tipe == "siswa":
             return self.redirect(
