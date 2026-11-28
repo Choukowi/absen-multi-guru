@@ -189,8 +189,10 @@ CREATE TABLE IF NOT EXISTS students (
     nama TEXT NOT NULL,
     kode TEXT UNIQUE NOT NULL,          -- NIS siswa (isi QR kartunya)
     class_id INTEGER NOT NULL REFERENCES classes(id),
-    jenis_kelamin TEXT DEFAULT ''       -- 'Laki-laki' / 'Perempuan' (tampil di
+    jenis_kelamin TEXT DEFAULT '',      -- 'Laki-laki' / 'Perempuan' (tampil di
                                         -- Kartu Pelajar v3); '' = belum diisi
+    no_wa_ortu TEXT DEFAULT ''         -- nomor WA orang tua (kolom No WA Ortu
+                                        -- di Kelola Siswa); '' = belum diisi
 );
 CREATE TABLE IF NOT EXISTS kehadiran (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -298,6 +300,8 @@ def init_db():
     kolom_siswa = {r["name"] for r in conn.execute("PRAGMA table_info(students)")}
     if "jenis_kelamin" not in kolom_siswa:
         conn.execute("ALTER TABLE students ADD COLUMN jenis_kelamin TEXT DEFAULT ''")
+    if "no_wa_ortu" not in kolom_siswa:
+        conn.execute("ALTER TABLE students ADD COLUMN no_wa_ortu TEXT DEFAULT ''")
     # Model "login hanya wali kelas": classes.wali_id menunjuk guru (users.id)
     # yang menjadi wali kelas itu. NULL = belum ada wali (guru belum bisa login).
     kolom_kelas = {r["name"] for r in conn.execute("PRAGMA table_info(classes)")}
@@ -2525,6 +2529,22 @@ def _jk_isi_kosong(conn, tabel, klausa_where, params, jk_baru):
     return True
 
 
+def _no_wa_ortu_isi_kosong(conn, kode, wa_baru):
+    """Isi no_wa_ortu pada siswa yang SUDAH ADA, khusus untuk import
+    Excel: hanya bila nomor tersimpan masih kosong DAN file memberi
+    nomor. Tidak pernah menimpa nomor yang sudah terisi.
+    Kembalikan True bila baris diperbarui, False bila tidak."""
+    wa = (wa_baru or "").strip()
+    if not wa:
+        return False
+    row = conn.execute(
+        "SELECT no_wa_ortu FROM students WHERE kode=?", (kode,)).fetchone()
+    if not row or (row["no_wa_ortu"] or "").strip():
+        return False
+    conn.execute("UPDATE students SET no_wa_ortu=? WHERE kode=?", (wa, kode))
+    return True
+
+
 def _jk_options(terpilih):
     """Opsi <option> Jenis Kelamin untuk form (terpilih = nilai saat ini)."""
     out = []
@@ -2696,10 +2716,12 @@ def _cari(self, user, qs, flash):
                       f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
                       f'<td><code>{esc(r["kode"])}</code></td>'
                       f'<td>{esc(r["kelas"])}</td>'
+                      f'<td>{esc(r["no_wa_ortu"] or "—")}</td>'
                       f'<td class="aksi">{tautan}</td></tr>')
         bagian += ('<div class="card"><h3>Siswa</h3><div class="table-scroll">'
                    '<table class="tabel kelola"><thead><tr><th class="no">No</th>'
-                   '<th class="nama">Nama</th><th>NIS</th><th>Kelas</th><th>Aksi</th>'
+                   '<th class="nama">Nama</th><th>NIS</th><th>Kelas</th>'
+                   '<th>No WA Ortu</th><th>Aksi</th>'
                    f'</tr></thead><tbody>{items}</tbody></table></div></div>')
     if guru_rows:
         items = ""
@@ -2850,12 +2872,21 @@ def _siswa_detail(self, user, sid, flash):
     chips = "".join(
         f'<div class="id-chip c-{s.lower()}"><span class="n">{total[s]}</span>'
         f'<span class="l">{s}</span></div>' for s in status_list)
+    _wa_n = _normal_no_wa(st["no_wa_ortu"])
+    if _wa_n:
+        wa_ortu_html = (f'<a href="https://wa.me/{_wa_n}" target="_blank" '
+                        f'rel="noopener">{esc(st["no_wa_ortu"])}</a>')
+    elif (st["no_wa_ortu"] or "").strip():
+        wa_ortu_html = esc(st["no_wa_ortu"])
+    else:
+        wa_ortu_html = "&mdash;"
     body = f"""<h2>Detail Siswa</h2>
     <div class="card">
       {bar_cari}<div class="id-flex">
         <div>
           <p class="id-nama"><b>{esc(st["nama"])}</b></p>
           <p class="muted" style="margin:0">NIS: <code>{esc(st["kode"])}</code> &mdash; Kelas: {esc(st["kelas"])}{edit}</p>
+          <p class="muted" style="margin:4px 0 0">No WA Ortu: {wa_ortu_html}</p>
         </div>
         <a class="btn btn-excel" href="/siswa/{st['id']}/unduh">{icon("download")} Unduh Excel</a>
         <a class="btn" href="/kartu-pelajar/siswa/{st['id']}">{icon("cap")} Kartu Pelajar</a>
@@ -2979,7 +3010,7 @@ def _buat_excel_detail_siswa(data, nama_sekolah, kop=None, logo_path=None):
     Lembar "Rekap 6 Bulan": kepala kop surat sekolah (logo di kiri
     atas bila ada logo terpasang + nama + alamat + kontak + garis
     pemisah, dari pengaturan) + judul "Detail Absensi Siswa" + blok
-    identitas (Nama/NIS/Kelas), lalu tabel rekap persis
+    identitas (Nama/NIS/Kelas/No WA Ortu), lalu tabel rekap persis
     halaman (Bulan, Hadir, Terlambat, Sakit, Izin, Alpa + baris Total
     tebal). Bila kop kosong, kepala kembali seperti dulu (nama sekolah
     saja di baris 1). Lembar "Rincian Kehadiran": baris rincian persis
@@ -3020,7 +3051,8 @@ def _buat_excel_detail_siswa(data, nama_sekolah, kop=None, logo_path=None):
     c.font = Font(bold=True, size=15, color="1F3864")
     for i, (label, nilai) in enumerate(
             (("Nama", st["nama"]), ("NIS", st["kode"]),
-             ("Kelas", st["kelas"]))):
+             ("Kelas", st["kelas"]),
+             ("No WA Ortu", st["no_wa_ortu"] or "—"))):
         r = 2 + off + i
         c = ws.cell(row=r, column=1, value=label)
         c.font = Font(bold=True, size=11, color="404040")
@@ -3933,22 +3965,31 @@ def _admin_siswa(self, user, qs, flash):
     items = ""
     for i, r in enumerate(rows):
         confirm_msg = f"Hapus siswa {js_str(r['nama'])}? Catatan kehadirannya juga akan terhapus."
+        _wa_n = _normal_no_wa(r["no_wa_ortu"])
+        if _wa_n:
+            sel_wa = (f'<td><a href="https://wa.me/{_wa_n}" target="_blank" '
+                      f'rel="noopener">{esc(r["no_wa_ortu"])}</a></td>')
+        elif (r["no_wa_ortu"] or "").strip():
+            sel_wa = f'<td>{esc(r["no_wa_ortu"])}</td>'
+        else:
+            sel_wa = '<td>&mdash;</td>'
         items += (
             f'<tr><td class="no">{i + 1}</td>'
             f'<td class="nama"><b>{esc(r["nama"])}</b></td>'
             f'<td><code>{esc(r["kode"])}</code></td>'
             f'<td>{esc(r["kelas"])}</td>'
+            f'{sel_wa}'
             f'<td class="aksi"><span class="aksi-grup">'
             f'<a class="btn-aksi" href="/siswa/{r["id"]}">Detail</a>'
             f'<a class="btn-aksi" href="/admin/siswa/{r["id"]}/edit">Edit</a>'
             f'<form method="post" action="/admin/siswa/{r["id"]}/hapus" class="inline" '
             f"onsubmit=\"return confirm('{esc(confirm_msg)}')\">"
             f'<button type="submit" class="btn-aksi">Hapus</button></form></span></td></tr>')
-    items = items or '<tr><td colspan="5" class="muted">Belum ada siswa.</td></tr>'
+    items = items or '<tr><td colspan="6" class="muted">Belum ada siswa.</td></tr>'
     body = f"""<h2>Kelola Siswa</h2>
     <div class="card table-card"><div class="table-scroll">
     <table class="tabel kelola"><thead><tr><th class="no">No</th><th class="nama">Nama</th>
-    <th>NIS</th><th>Kelas</th><th>Aksi</th></tr></thead>
+    <th>NIS</th><th>Kelas</th><th>No WA Ortu</th><th>Aksi</th></tr></thead>
     <tbody>{items}</tbody></table></div></div>
     <div class="card form-card"><h3>Tambah Siswa</h3>
     <form method="post" action="/admin/siswa">
@@ -3956,6 +3997,7 @@ def _admin_siswa(self, user, qs, flash):
       <label>NIS <input name="kode" required></label>
       <label>Kelas <select name="class_id">{class_opts}</select></label>
       <label>Jenis Kelamin <select name="jenis_kelamin">{_jk_options("")}</select></label>
+      <label>No WA Ortu <input name="no_wa_ortu" inputmode="tel" placeholder="mis. 0812xxxxxxx (boleh kosong)"></label>
       <button type="submit" class="btn btn-primary">Tambah Siswa</button></form></div>"""
     return self.send_html(layout(user, "Siswa", body, flash, aktif="siswa"))
 
@@ -3963,9 +4005,10 @@ def _admin_siswa(self, user, qs, flash):
 def _post_admin_siswa(self, f):
     try:
         conn = db()
-        conn.execute("INSERT INTO students (nama,kode,class_id,jenis_kelamin) VALUES (?,?,?,?)",
+        conn.execute("INSERT INTO students (nama,kode,class_id,jenis_kelamin,no_wa_ortu) VALUES (?,?,?,?,?)",
                      (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]),
-                      _jk_bersih(f.get("jenis_kelamin", ""))))
+                      _jk_bersih(f.get("jenis_kelamin", "")),
+                      f.get("no_wa_ortu", "").strip()))
         conn.commit(); conn.close()
         return self.redirect("/admin/siswa", "Siswa ditambahkan.")
     except sqlite3.IntegrityError:
@@ -3990,6 +4033,7 @@ def _admin_siswa_edit(self, user, sid, flash):
       <label>NIS <input name="kode" value="{esc(st['kode'])}" required></label>
       <label>Kelas <select name="class_id">{class_opts}</select></label>
       <label>Jenis Kelamin <select name="jenis_kelamin">{_jk_options(st['jenis_kelamin'])}</select></label>
+      <label>No WA Ortu <input name="no_wa_ortu" value="{esc(st['no_wa_ortu'] or '')}" inputmode="tel" placeholder="mis. 0812xxxxxxx (boleh kosong)"></label>
       <button type="submit" class="btn btn-primary">Simpan Perubahan</button></form>
     <p><a href="/admin/siswa">Kembali ke daftar siswa</a></p>"""
     return self.send_html(layout(user, "Edit Siswa", body, flash, aktif="siswa"))
@@ -4002,9 +4046,10 @@ def _post_admin_siswa_edit(self, sid, f):
         conn.close()
         return self.redirect("/admin/siswa", "Siswa tidak ditemukan.")
     try:
-        conn.execute("UPDATE students SET nama=?, kode=?, class_id=?, jenis_kelamin=? WHERE id=?",
+        conn.execute("UPDATE students SET nama=?, kode=?, class_id=?, jenis_kelamin=?, no_wa_ortu=? WHERE id=?",
                      (f["nama"].strip(), f["kode"].strip(), int(f["class_id"]),
-                      _jk_bersih(f.get("jenis_kelamin", "")), sid))
+                      _jk_bersih(f.get("jenis_kelamin", "")),
+                      f.get("no_wa_ortu", "").strip(), sid))
         conn.commit(); conn.close()
         return self.redirect("/admin/siswa", "Siswa diperbarui.")
     except sqlite3.IntegrityError:
@@ -4591,14 +4636,16 @@ def _buat_template_excel(judul_sheet, kolom, lebar, petunjuk):
 
 def _admin_siswa_template(self):
     data = _buat_template_excel(
-        "Data Siswa", ["Nama", "NIS", "Kelas", "Jenis Kelamin"], [30, 16, 16, 16],
+        "Data Siswa", ["Nama", "NIS", "Kelas", "Jenis Kelamin", "No WA Ortu"],
+        [30, 16, 16, 16, 20],
         ["Template Import Data Siswa",
          "Isi data siswa mulai baris ke-2 pada lembar 'Data Siswa'.",
-         "Kolom: Nama | NIS | Kelas (nama kelas, mis. 1A) | Jenis Kelamin (boleh kosong).",
+         "Kolom: Nama | NIS | Kelas (nama kelas, mis. 1A) | Jenis Kelamin (boleh kosong) | No WA Ortu (boleh kosong).",
          "Jenis Kelamin diisi 'Laki-laki' atau 'Perempuan' (untuk Kartu Pelajar).",
-         "Contoh baris: Budi Santoso | 1001 | 1A | Laki-laki",
+         "No WA Ortu diisi nomor WhatsApp orang tua, mis. 081234567890.",
+         "Contoh baris: Budi Santoso | 1001 | 1A | Laki-laki | 081234567890",
          "Kelas yang belum ada akan dibuat otomatis saat upload.",
-         "NIS yang sudah terdaftar tidak digandakan; bila Jenis Kelamin-nya masih kosong dan file mengisinya, Jenis Kelamin itu diperbarui.",
+         "NIS yang sudah terdaftar tidak digandakan; bila Jenis Kelamin / No WA Ortu-nya masih kosong dan file mengisinya, kolom itu diperbarui.",
          "Simpan sebagai .xlsx, lalu upload di menu Kelola Siswa."])
     return self.send_bytes(
         data,
@@ -4649,15 +4696,21 @@ def _post_admin_siswa_import(self):
         kode = _sel_excel(row[1]) if len(row) > 1 else ""
         kelas_nama = _sel_excel(row[2]) if len(row) > 2 else ""
         jk = _sel_excel(row[3]) if len(row) > 3 else ""
+        wa_ortu = _sel_excel(row[4]) if len(row) > 4 else ""
         if not nama and not kode and not kelas_nama:
             continue  # baris kosong: abaikan diam-diam
         if not nama or not kode or not kelas_nama:
             dilewati += 1
             continue
         if kode in nis_ada:
-            # NIS sudah terdaftar: tidak digandakan, tapi bila Jenis
-            # Kelamin-nya masih kosong dan file mengisinya, isi saja.
+            # NIS sudah terdaftar: tidak digandakan, tapi isi kolom yang
+            # masih kosong bila file mengisinya (Jenis Kelamin / No WA Ortu).
+            upd = False
             if _jk_isi_kosong(conn, "students", "kode=?", (kode,), jk):
+                upd = True
+            if _no_wa_ortu_isi_kosong(conn, kode, wa_ortu):
+                upd = True
+            if upd:
                 diperbarui += 1
             else:
                 dilewati += 1
@@ -4668,8 +4721,9 @@ def _post_admin_siswa_import(self):
                                (kelas_nama,))
             kelas_peta[kunci] = cur.lastrowid
             kelas_baru += 1
-        conn.execute("INSERT INTO students (nama, kode, class_id, jenis_kelamin) "
-                     "VALUES (?,?,?,?)", (nama, kode, kelas_peta[kunci], _jk_bersih(jk)))
+        conn.execute("INSERT INTO students (nama, kode, class_id, jenis_kelamin, no_wa_ortu) "
+                     "VALUES (?,?,?,?,?)", (nama, kode, kelas_peta[kunci], _jk_bersih(jk),
+                                           wa_ortu.strip()))
         nis_ada.add(kode)
         ditambah += 1
     conn.commit(); conn.close()
@@ -4677,7 +4731,7 @@ def _post_admin_siswa_import(self):
     if kelas_baru:
         pesan += f", {kelas_baru} kelas baru dibuat"
     if diperbarui:
-        pesan += f", {diperbarui} data diperbarui (Jenis Kelamin)"
+        pesan += f", {diperbarui} data diperbarui (Jenis Kelamin / No WA Ortu)"
     if dilewati:
         pesan += (f", {dilewati} baris dilewati (NIS sudah ada / data "
                   "tidak lengkap)")
