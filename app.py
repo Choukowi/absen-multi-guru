@@ -5156,6 +5156,15 @@ Handler.admin_backup_unduh = _admin_backup_unduh
 Handler.post_admin_backup_pulihkan = _post_admin_backup_pulihkan
 
 
+# Migrasi DB wajib jalan juga di bawah WSGI (PythonAnywhere): di sana app.py
+# hanya di-import sebagai modul, main() tidak pernah dipanggil, sehingga
+# init_db() tidak jalan dan kolom baru (mis. jam_pulang) tidak pernah
+# ditambahkan ke DB live — halaman Scan Gerbang lalu error
+# "no such column: k.jam_pulang". Panggilan ini idempoten, aman diulang
+# setiap worker start.
+init_db()
+
+
 def main():
     init_db()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
