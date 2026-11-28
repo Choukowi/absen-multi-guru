@@ -364,6 +364,7 @@ table.tabel.kelola td.aksi { white-space: normal; }
 .hasil-meta { font-size: 1.05rem; margin-top: 4px; }
 .hasil-hadir { background: #d3f8e3; border-color: #4cc38a; color: #05603a; }
 .hasil-terlambat { background: #fef0c7; border-color: #e3b341; color: #7a4a01; }
+.hasil-pulang { background: #e0f2fe; border-color: #38bdf8; color: #075985; }
 .hasil-info { background: #e8edff; border-color: #9db2ff; color: #26356e; }
 .hasil-error { background: #fee4e2; border-color: #f19b95; color: #7a271a; }
 
